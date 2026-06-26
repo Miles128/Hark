@@ -1,0 +1,11 @@
+[project]
+name = "hark-asr"
+version = "0.1.0"
+description = "Hark · 谛听 - 本地桌面语音转文字应用"
+requires-python = "==3.14.*"
+dependencies = [
+    "mlx-qwen3-asr>=0.3.5",
+]
+
+[tool.uv]
+python-preference = "only-system"
