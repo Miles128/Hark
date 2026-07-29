@@ -2,24 +2,23 @@
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { applyTheme } from "./utils/theme";
 import SourceSelector, { type AudioSource } from "./components/SourceSelector.vue";
 import BackendSelector from "./components/BackendSelector.vue";
 import VolumeMeter from "./components/VolumeMeter.vue";
 import VideoDownloadPanel from "./components/VideoDownloadPanel.vue";
 import TranscriptPanel, { type Segment } from "./components/TranscriptPanel.vue";
+import TtsControls from "./components/TtsControls.vue";
+import TtsPanel from "./components/TtsPanel.vue";
 import SettingsModal, { type AppSettings } from "./components/SettingsModal.vue";
 import type { AsrBackend, AsrProfile } from "./types/asr";
 
+type AppMode = "asr" | "tts";
 type TabType = "recording" | "video";
 
 interface VolumeEvent {
   db: number;
   level: number;
-}
-
-interface SliceEvent {
-  path: string;
-  index: number;
 }
 
 interface AudioDeviceInfo {
@@ -49,6 +48,7 @@ interface WarmupEvent {
   message: string;
 }
 
+const activeMode = ref<AppMode>("asr");
 const activeTab = ref<TabType>("recording");
 const source = ref<AudioSource>("microphone");
 const micDevice = ref<string>("");
@@ -57,12 +57,21 @@ const hasBlackhole = ref(false);
 const devices = ref<AudioDeviceInfo[]>([]);
 const backendStatus = ref<BackendStatus[]>([]);
 const sidebarCollapsed = ref(false);
+const ttsText = ref("");
 
 const profiles = ref<AsrProfile[]>([]);
 const selectedProfileId = ref<string>("");
 const activeProfile = computed(() =>
   profiles.value.find((p) => p.id === selectedProfileId.value)
 );
+
+const dashscopeApiKey = computed(() => {
+  const fromActive =
+    activeProfile.value?.backend === "DashScope" ? activeProfile.value.apiKey : "";
+  if (fromActive) return fromActive;
+  const any = profiles.value.find((p) => p.backend === "DashScope" && p.apiKey);
+  return any?.apiKey ?? "";
+});
 
 const isRecording = ref(false);
 const liveTranscribe = ref(false);
@@ -81,20 +90,8 @@ const appSettings = ref<AppSettings>({
 });
 
 let unlistenVolume: UnlistenFn | null = null;
-let unlistenSlice: UnlistenFn | null = null;
 let unlistenSegment: UnlistenFn | null = null;
 let unlistenWarmup: UnlistenFn | null = null;
-
-function applyTheme(theme: string) {
-  const root = document.documentElement;
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const isDark = theme === "dark" || (theme === "system" && prefersDark);
-  if (isDark) {
-    root.classList.add("dark");
-  } else {
-    root.classList.remove("dark");
-  }
-}
 
 function buildAsrConfig(profile: AsrProfile): AsrConfig {
   return {
@@ -144,6 +141,7 @@ async function loadProfiles() {
 watch(
   appSettings,
   async (settings) => {
+    applyTheme(settings.theme);
     try {
       await invoke("set_app_settings", { settings });
     } catch {
@@ -202,12 +200,6 @@ onMounted(async () => {
     volume.value = e.payload;
   });
 
-  unlistenSlice = await listen<SliceEvent>("audio:slice", (e) => {
-    if (liveTranscribe.value) {
-      transcribeSlice(e.payload.path, e.payload.index);
-    }
-  });
-
   unlistenSegment = await listen<Segment>("asr:segment", (e) => {
     segments.value.push(e.payload);
   });
@@ -223,7 +215,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unlistenVolume?.();
-  unlistenSlice?.();
   unlistenSegment?.();
   unlistenWarmup?.();
 });
@@ -335,30 +326,10 @@ async function warmupMlxModel() {
   <div class="app">
     <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header" data-tauri-drag-region>
-        <h1 class="logo">
-          <span class="logo-icon" aria-hidden="true">
-            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M6 14C6 8 10 4 16 4C22 4 26 8 26 14C26 18 24 20 22 23C20 26 21 28 17 28"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-              <path
-                d="M13 14C13 11 15 9 17 10C19 10 20 13 19 16C18 18 16 19 15 21"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </span>
-          Hark · 谛听
-        </h1>
+        <div class="header-spacer" />
         <div class="header-actions">
-          <button class="settings-btn" @click="settingsOpen = true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+          <button class="settings-btn" @click="settingsOpen = true" title="设置">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 0 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 0 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 0 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 0 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
           </button>
           <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed">
             {{ sidebarCollapsed ? "›" : "‹" }}
@@ -367,81 +338,105 @@ async function warmupMlxModel() {
       </div>
 
       <div class="sidebar-content">
-        <div class="tab-switcher">
+        <div class="mode-switcher">
           <button
-            class="tab-btn"
-            :class="{ active: activeTab === 'recording' }"
-            @click="activeTab = 'recording'"
+            class="mode-btn"
+            :class="{ active: activeMode === 'asr' }"
+            @click="activeMode = 'asr'"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
-            <span>录音转换</span>
+            ASR
           </button>
           <button
-            class="tab-btn"
-            :class="{ active: activeTab === 'video' }"
-            @click="activeTab = 'video'"
+            class="mode-btn"
+            :class="{ active: activeMode === 'tts' }"
+            @click="activeMode = 'tts'"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
-            <span>网络视频转换</span>
+            TTS
           </button>
         </div>
 
-        <template v-if="activeTab === 'recording'">
-          <SourceSelector
-            v-model="source"
-            v-model:mic-device="micDevice"
-            v-model:system-device="systemDevice"
-            :devices="devices"
-            :has-blackhole="hasBlackhole"
-            @open-audio-midi="openAudioMidiSetup"
-          />
-
-          <VolumeMeter :db="volume.db" :level="volume.level" :is-recording="isRecording" />
-
-          <BackendSelector
-            v-model="selectedProfileId"
-            :profiles="profiles"
-            :status="backendStatus"
-          />
-
-          <div class="record-card">
+        <template v-if="activeMode === 'asr'">
+          <div class="tab-switcher">
             <button
-              class="record-btn"
-              :class="{ recording: isRecording }"
-              @click="toggleRecording"
+              class="tab-btn"
+              :class="{ active: activeTab === 'recording' }"
+              @click="activeTab = 'recording'"
             >
-              <span class="record-dot" />
-              <span>{{ isRecording ? "停止录音" : "开始录音" }}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+              <span>录音</span>
             </button>
+            <button
+              class="tab-btn"
+              :class="{ active: activeTab === 'video' }"
+              @click="activeTab = 'video'"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
+              <span>视频</span>
+            </button>
+          </div>
 
-            <div class="live-switch-row" :class="{ disabled: isRecording }">
-              <span class="live-switch-label">边录边转</span>
-              <label class="live-switch">
-                <input v-model="liveTranscribe" type="checkbox" :disabled="isRecording" />
-                <span class="live-switch-track">
-                  <span class="live-switch-thumb" />
-                </span>
-              </label>
+          <template v-if="activeTab === 'recording'">
+            <SourceSelector
+              v-model="source"
+              v-model:mic-device="micDevice"
+              v-model:system-device="systemDevice"
+              :devices="devices"
+              :has-blackhole="hasBlackhole"
+              @open-audio-midi="openAudioMidiSetup"
+            />
+
+            <VolumeMeter :db="volume.db" :level="volume.level" :is-recording="isRecording" />
+
+            <BackendSelector
+              v-model="selectedProfileId"
+              :profiles="profiles"
+              :status="backendStatus"
+            />
+
+            <div class="record-card">
+              <button
+                class="record-btn"
+                :class="{ recording: isRecording }"
+                @click="toggleRecording"
+              >
+                <span class="record-dot" />
+                <span>{{ isRecording ? "停止" : "录音" }}</span>
+              </button>
+
+              <div class="live-switch-row" :class="{ disabled: isRecording }">
+                <span class="live-switch-label">边录边转</span>
+                <label class="live-switch">
+                  <input v-model="liveTranscribe" type="checkbox" :disabled="isRecording" />
+                  <span class="live-switch-track">
+                    <span class="live-switch-thumb" />
+                  </span>
+                </label>
+              </div>
             </div>
-          </div>
 
-          <div v-if="isTranscribing" class="status">
-            正在转写…<br /><small>本地模型首次加载较慢，请稍等</small>
-          </div>
-          <div v-if="recordedFile && !isRecording && !liveTranscribe" class="file-info">
-            已保存 <code>{{ recordedFile }}</code>
-          </div>
-          <div v-if="error" class="error">{{ error }}</div>
+            <div v-if="isTranscribing" class="status">
+              正在转写…<br /><small>本地模型首次加载较慢，请稍等</small>
+            </div>
+            <div v-if="recordedFile && !isRecording && !liveTranscribe" class="file-info">
+              已保存 <code>{{ recordedFile }}</code>
+            </div>
+            <div v-if="error" class="error">{{ error }}</div>
+          </template>
+
+          <template v-else>
+            <VideoDownloadPanel @transcribe="handleUrlTranscribe" />
+          </template>
         </template>
 
         <template v-else>
-          <VideoDownloadPanel @transcribe="handleUrlTranscribe" />
+          <TtsControls :text="ttsText" :dashscope-api-key="dashscopeApiKey" />
         </template>
       </div>
     </aside>
 
     <main class="main">
-      <TranscriptPanel :segments="segments" @clear="clearTranscript" />
+      <TranscriptPanel v-if="activeMode === 'asr'" :segments="segments" @clear="clearTranscript" />
+      <TtsPanel v-else v-model="ttsText" />
     </main>
   </div>
 
@@ -486,53 +481,29 @@ async function warmupMlxModel() {
 .sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 18px 16px 14px;
+  justify-content: flex-end;
+  padding: 10px 12px 8px;
   -webkit-app-region: drag;
   app-region: drag;
 }
 
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.3px;
-}
-
-.logo-icon {
-  width: 22px;
-  height: 22px;
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.logo-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.sidebar.collapsed .logo {
-  display: none;
+.header-spacer {
+  flex: 1;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
 .settings-btn,
 .collapse-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -542,8 +513,8 @@ async function warmupMlxModel() {
 
 .settings-btn svg,
 .collapse-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
 }
 
 .settings-btn:hover,
@@ -560,10 +531,10 @@ async function warmupMlxModel() {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 16px 20px;
+  padding: 6px 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .sidebar.collapsed .sidebar-content {
@@ -580,10 +551,45 @@ async function warmupMlxModel() {
   overflow: hidden;
 }
 
+.mode-switcher {
+  display: flex;
+  gap: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+  background: transparent;
+  transition: var(--transition);
+  border-right: 1px solid var(--border);
+}
+
+.mode-btn:last-child {
+  border-right: none;
+}
+
+.mode-btn:hover:not(.active) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .tab-switcher {
   display: flex;
   gap: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   overflow: hidden;
 }
@@ -593,9 +599,9 @@ async function warmupMlxModel() {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 12px;
-  font-size: 13px;
+  gap: 5px;
+  padding: 6px 8px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
   background: transparent;
@@ -613,22 +619,21 @@ async function warmupMlxModel() {
 }
 
 .tab-btn.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .tab-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
 }
 
 .record-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: 8px;
+  padding: 10px;
   border-radius: var(--radius-md);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -639,14 +644,14 @@ async function warmupMlxModel() {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 14px 24px;
+  gap: 8px;
+  padding: 8px 14px;
   border-radius: 999px;
   background: var(--accent);
   color: #fff;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
 }
 
 .record-btn:hover {
@@ -672,8 +677,8 @@ async function warmupMlxModel() {
 }
 
 .record-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: currentColor;
 }
@@ -686,12 +691,12 @@ async function warmupMlxModel() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 6px 8px;
   border-radius: var(--radius-sm);
   background: transparent;
   border: 1px dashed var(--border);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: default;
   transition: var(--transition);
@@ -713,8 +718,8 @@ async function warmupMlxModel() {
 .live-switch {
   position: relative;
   display: inline-block;
-  width: 44px;
-  height: 24px;
+  width: 36px;
+  height: 20px;
   cursor: pointer;
 }
 
@@ -736,10 +741,10 @@ async function warmupMlxModel() {
 
 .live-switch-thumb {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
+  top: 1px;
+  left: 1px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--surface);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
@@ -752,7 +757,7 @@ async function warmupMlxModel() {
 }
 
 .live-switch input:checked + .live-switch-track .live-switch-thumb {
-  transform: translateX(20px);
+  transform: translateX(16px);
   background: #fff;
 }
 
@@ -762,14 +767,14 @@ async function warmupMlxModel() {
 }
 
 .status {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
   text-align: center;
   flex-shrink: 0;
 }
 
 .file-info {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
   word-break: break-all;
   text-align: center;
@@ -784,12 +789,12 @@ async function warmupMlxModel() {
 }
 
 .error {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--danger);
   background: rgba(255, 59, 48, 0.08);
   border: 1px solid rgba(255, 59, 48, 0.15);
   border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  padding: 8px 10px;
   white-space: pre-wrap;
   flex-shrink: 0;
 }

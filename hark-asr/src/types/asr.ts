@@ -1,4 +1,4 @@
-export type AsrBackend = "MlxQwen3" | "WhisperCpp" | "DashScope" | "OpenAiWhisper";
+export type AsrBackend = "MlxQwen3" | "SenseVoice" | "WhisperCpp" | "DashScope" | "OpenAiWhisper";
 
 export interface AsrProfile {
   id: string;

@@ -12,10 +12,16 @@ dist
 dist-ssr
 *.local
 .venv
+# 项目本地 Python 依赖目录（pip install --target=pylibs 装入）
+pylibs/
 \#/
 Homebrew/
 python3/
+就是/
+版/
+这里的/
 whisper.cpp/
+*.egg-info/
 
 # Editor directories and files
 .vscode/*

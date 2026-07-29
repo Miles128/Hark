@@ -153,34 +153,36 @@ function selectOption(value: AudioSource) {
 .source-selector {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .section-label {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
 }
 
 .options {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: 4px;
 }
 
 .option {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 6px;
-  padding: 12px 6px;
-  border-radius: var(--radius-md);
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-secondary);
   transition: var(--transition);
+  min-height: 0;
 }
 
 .option:hover:not(.disabled) {
@@ -204,8 +206,9 @@ function selectOption(value: AudioSource) {
 }
 
 .icon {
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
   transition: var(--transition);
 }
 
@@ -217,7 +220,8 @@ function selectOption(value: AudioSource) {
 .label {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .desc {
@@ -227,33 +231,33 @@ function selectOption(value: AudioSource) {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .field label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
 }
 
 .field select {
-  padding: 10px 12px;
+  padding: 5px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface-hover);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
 .blackhole-warning {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
   background: rgba(255, 149, 0, 0.08);
   border: 1px solid rgba(255, 149, 0, 0.2);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  line-height: 1.5;
+  padding: 8px 10px;
+  line-height: 1.45;
 }
 
 .blackhole-warning p {
@@ -262,14 +266,15 @@ function selectOption(value: AudioSource) {
 
 .hint-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .hint-actions a,
 .hint-actions button {
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 8px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-primary);

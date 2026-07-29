@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
+use tokio::sync::mpsc::UnboundedSender;
 
 pub const BLACKHOLE_NAMES: &[&str] = &["blackhole", "soundflower", "loopback"];
 
@@ -32,12 +33,6 @@ pub struct AudioDeviceInfo {
 pub struct VolumeEvent {
     pub db: f32,
     pub level: f32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SliceEvent {
-    pub path: String,
-    pub index: u32,
 }
 
 pub fn list_audio_devices() -> Vec<AudioDeviceInfo> {
@@ -149,6 +144,7 @@ pub fn start_recording(
     system_device: Option<String>,
     live_transcribe: bool,
     output_dir: PathBuf,
+    slice_tx: UnboundedSender<(String, u32)>,
     app_handle: AppHandle,
 ) -> Result<RecordingHandle, String> {
     let device_names = resolve_device_names(source, mic_device.as_deref(), system_device.as_deref())?;
@@ -161,7 +157,7 @@ pub fn start_recording(
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
 
     std::thread::spawn(move || {
-        let result = recording_thread(device_names, live_transcribe, output_dir, stop_rx, app_handle);
+        let result = recording_thread(device_names, live_transcribe, output_dir, stop_rx, slice_tx, app_handle);
         let _ = result_tx.send(result);
     });
 
@@ -205,6 +201,7 @@ fn recording_thread(
     live_transcribe: bool,
     output_dir: PathBuf,
     stop_rx: mpsc::Receiver<()>,
+    slice_tx: UnboundedSender<(String, u32)>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     std::fs::create_dir_all(&output_dir)
@@ -284,7 +281,7 @@ fn recording_thread(
 
                 // 检查是否需要切片
                 if live_transcribe && last_slice_time.elapsed().unwrap_or(slice_duration) >= slice_duration {
-                    save_slice(&buffers, &output_dir, target_sample_rate, slice_index, slice_samples, &app_handle);
+                    save_slice(&buffers, &output_dir, target_sample_rate, slice_index, slice_samples, &slice_tx);
                     slice_index += 1;
                     last_slice_time = SystemTime::now();
                 }
@@ -352,6 +349,14 @@ fn stream_error_callback(err: cpal::StreamError) {
     eprintln!("音频流错误: {}", err);
 }
 
+fn rms_to_db(rms: f32) -> f32 {
+    20.0 * rms.max(1e-10).log10()
+}
+
+fn rms_to_level(rms: f32) -> f32 {
+    rms.min(1.0).max(0.0)
+}
+
 fn emit_volume(buffers: &[Arc<Mutex<Vec<f32>>>], window_samples: usize, app_handle: &AppHandle) {
     let mut sum_squares: f64 = 0.0;
     let mut count: usize = 0;
@@ -370,8 +375,8 @@ fn emit_volume(buffers: &[Arc<Mutex<Vec<f32>>>], window_samples: usize, app_hand
     }
 
     let rms = (sum_squares / count as f64).sqrt() as f32;
-    let db = 20.0 * rms.max(1e-10).log10();
-    let level = rms.min(1.0).max(0.0);
+    let db = rms_to_db(rms);
+    let level = rms_to_level(rms);
 
     let _ = app_handle.emit("audio:volume", VolumeEvent { db, level });
 }
@@ -382,7 +387,7 @@ fn save_slice(
     sample_rate: u32,
     index: u32,
     slice_samples: usize,
-    app_handle: &AppHandle,
+    slice_tx: &UnboundedSender<(String, u32)>,
 ) {
     let slice_buffers: Vec<Vec<f32>> = buffers
         .iter()
@@ -402,13 +407,7 @@ fn save_slice(
     let path = output_dir.join(&filename);
 
     if write_wav(&path, &mixed, sample_rate).is_ok() {
-        let _ = app_handle.emit(
-            "audio:slice",
-            SliceEvent {
-                path: path.to_string_lossy().to_string(),
-                index,
-            },
-        );
+        let _ = slice_tx.send((path.to_string_lossy().to_string(), index));
     }
 }
 
@@ -451,4 +450,75 @@ fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), Strin
         .finalize()
         .map_err(|e| format!("finalize WAV 失败: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn mix_buffers_averages_inputs() {
+        let a = vec![1.0f32, -1.0, 0.5];
+        let b = vec![1.0f32, 1.0, -0.5];
+        let mixed = mix_buffers(&[a, b]);
+        assert_eq!(mixed.len(), 3);
+        assert!((mixed[0] - 1.0).abs() < f32::EPSILON);
+        assert!(mixed[1].abs() < f32::EPSILON);
+        assert!(mixed[2].abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn mix_buffers_pads_shorter_input_with_zeros() {
+        let a = vec![1.0f32, 1.0, 1.0];
+        let b = vec![1.0f32];
+        let mixed = mix_buffers(&[a, b]);
+        assert_eq!(mixed.len(), 3);
+        assert!((mixed[0] - 1.0).abs() < f32::EPSILON);
+        assert!((mixed[1] - 0.5).abs() < f32::EPSILON);
+        assert!((mixed[2] - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn mix_buffers_empty_returns_empty() {
+        let mixed = mix_buffers(&[]);
+        assert!(mixed.is_empty());
+    }
+
+    #[test]
+    fn mix_buffers_clamps_to_valid_range() {
+        let a = vec![2.0f32];
+        let b = vec![2.0f32];
+        let mixed = mix_buffers(&[a, b]);
+        assert_eq!(mixed[0], 1.0);
+    }
+
+    #[test]
+    fn write_wav_creates_valid_file() {
+        let tmp_dir = std::env::temp_dir().join("hark-asr-tests");
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let path = tmp_dir.join("test.wav");
+        let samples = vec![0.0f32, 0.5, -0.5, 1.0, -1.0];
+        write_wav(&path, &samples, 16000).unwrap();
+
+        assert!(path.exists());
+        let reader = hound::WavReader::open(&path).unwrap();
+        assert_eq!(reader.spec().channels, 1);
+        assert_eq!(reader.spec().sample_rate, 16000);
+        assert_eq!(reader.spec().bits_per_sample, 16);
+        assert_eq!(reader.len(), samples.len() as u32);
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn volume_event_calculation_is_monotonic() {
+        // 更大 RMS 应该对应更高 level 和更高 db
+        let low_db = rms_to_db(0.1);
+        let high_db = rms_to_db(0.8);
+        let low_level = rms_to_level(0.1);
+        let high_level = rms_to_level(0.8);
+        assert!(high_level > low_level);
+        assert!(high_db > low_db);
+    }
 }

@@ -1,6 +1,7 @@
 mod asr;
 mod audio;
 mod profiles;
+mod tts;
 mod url_audio;
 
 use asr::{backend_status, transcribe_file, AsrBackend, AsrBackendStatus, AsrConfig};
@@ -10,15 +11,19 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+use tokio::sync::mpsc;
+use tts::{SynthesizeResult, TtsBackend, TtsBackendStatus, TtsConfig, TtsVoice};
 
 pub struct AppState {
     recording: Mutex<Option<RecordingHandle>>,
     recordings_dir: Mutex<Option<PathBuf>>,
     asr_config: Mutex<AsrConfig>,
+    tts_config: Mutex<TtsConfig>,
     transcript: Mutex<Vec<TranscriptSegment>>,
     settings: Mutex<AppSettings>,
     last_auto_save_hash: Mutex<Option<u64>>,
     db: Mutex<Option<rusqlite::Connection>>,
+    slice_queue_tx: Mutex<Option<mpsc::UnboundedSender<(String, u32)>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -194,6 +199,91 @@ fn get_asr_backend_status(state: tauri::State<AppState>) -> Vec<AsrBackendStatus
 }
 
 #[tauri::command]
+fn get_tts_config(state: tauri::State<AppState>) -> TtsConfig {
+    state.tts_config.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_tts_config(state: tauri::State<AppState>, config: TtsConfig) -> Result<(), String> {
+    *state.tts_config.lock().unwrap() = config;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_tts_backend_status() -> Vec<TtsBackendStatus> {
+    tts::backend_status()
+}
+
+#[tauri::command]
+async fn list_tts_voices(backend: TtsBackend) -> Result<Vec<TtsVoice>, String> {
+    tts::list_voices(backend).await
+}
+
+#[tauri::command]
+async fn synthesize_tts(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    text: String,
+    config: Option<TtsConfig>,
+) -> Result<SynthesizeResult, String> {
+    let config = config.unwrap_or_else(|| state.tts_config.lock().unwrap().clone());
+    let output_dir = {
+        let dir_guard = state.recordings_dir.lock().unwrap();
+        dir_guard
+            .clone()
+            .unwrap_or_else(|| {
+                app_handle
+                    .path()
+                    .audio_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir())
+                    .join("hark-asr")
+            })
+            .join("tts")
+    };
+    tts::synthesize(&text, &config, &output_dir).await
+}
+
+#[tauri::command]
+fn copy_tts_file(src: String, dest: String) -> Result<(), String> {
+    std::fs::copy(&src, &dest).map_err(|e| format!("导出失败: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn read_tts_file_base64(path: String) -> Result<String, String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(&path).map_err(|e| format!("读取音频失败: {}", e))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|e| format!("读取音频失败: {}", e))?;
+    Ok(base64_encode(&buf))
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let a = chunk[0] as u32;
+        let b = chunk.get(1).copied().unwrap_or(0) as u32;
+        let c = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (a << 16) | (b << 8) | c;
+        out.push(TABLE[((triple >> 18) & 63) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+#[tauri::command]
 fn get_asr_profiles(state: tauri::State<AppState>) -> Result<Vec<AsrProfile>, String> {
     let guard = state.db.lock().unwrap();
     let conn = guard.as_ref().ok_or("数据库未初始化")?;
@@ -244,12 +334,20 @@ fn start_recording(
         })
     };
 
+    let slice_tx = state
+        .slice_queue_tx
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "切片转写队列未初始化".to_string())?;
+
     let handle = audio::start_recording(
         source,
         mic_device,
         system_device,
         live_transcribe,
         recordings_dir,
+        slice_tx,
         app_handle,
     )?;
     *state.recording.lock().unwrap() = Some(handle);
@@ -281,7 +379,6 @@ async fn warmup_mlx_model(app_handle: tauri::AppHandle) -> Result<(), String> {
     let _ = app_handle.emit("asr:warmup", WarmupEvent { status: "downloading".to_string(), message: "正在准备 mlx-qwen3-asr 模型（首次使用需下载）…".to_string() });
 
     tokio::task::spawn_blocking(move || {
-        let python = asr::mlx_qwen3::find_mlx_python()?;
         let script = r#"
 import os
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -293,8 +390,7 @@ import mlx_qwen3_asr
 mlx_qwen3_asr.load_model()
 print("ok")
 "#;
-        asr::run_python_with_env(
-            &python,
+        asr::pylibs::run_python(
             script,
             &[
                 ("HF_ENDPOINT", "https://hf-mirror.com"),
@@ -307,6 +403,43 @@ print("ok")
     .map_err(|e| e)?;
 
     let _ = app_handle.emit("asr:warmup", WarmupEvent { status: "ready".to_string(), message: "模型就绪".to_string() });
+    Ok(())
+}
+
+#[tauri::command]
+async fn warmup_sensevoice_model(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let _ = app_handle.emit("asr:warmup", WarmupEvent { status: "downloading".to_string(), message: "正在加载 SenseVoice 模型…".to_string() });
+
+    tokio::task::spawn_blocking(move || {
+        let script = r#"
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")
+home = os.path.expanduser("~")
+os.environ.setdefault("HF_HOME", os.path.join(home, ".cache", "huggingface"))
+
+from mlx_audio.stt import load
+
+model_path = os.path.expanduser("~/models/mlx-community/SenseVoiceSmall")
+if not os.path.exists(model_path):
+    raise FileNotFoundError(f"模型未找到: {model_path}，请先下载 mlx-community/SenseVoiceSmall")
+
+load(model_path)
+print("ok")
+"#;
+        asr::pylibs::run_python(
+            script,
+            &[
+                ("HF_ENDPOINT", "https://hf-mirror.com"),
+                ("HF_HUB_DOWNLOAD_TIMEOUT", "300"),
+            ],
+        )
+    })
+    .await
+    .map_err(|e| format!("模型预热任务被中断: {:?}", e))?
+    .map_err(|e| e)?;
+
+    let _ = app_handle.emit("asr:warmup", WarmupEvent { status: "ready".to_string(), message: "SenseVoice 模型就绪".to_string() });
     Ok(())
 }
 
@@ -407,6 +540,40 @@ pub fn run() {
             let state = app.state::<AppState>();
             *state.settings.lock().unwrap() = settings;
             *state.db.lock().unwrap() = Some(db);
+
+            let (slice_tx, mut slice_rx) = mpsc::unbounded_channel::<(String, u32)>();
+            *state.slice_queue_tx.lock().unwrap() = Some(slice_tx);
+
+            let consumer_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some((path, index)) = slice_rx.recv().await {
+                    let config = {
+                        let state = consumer_handle.state::<AppState>();
+                        let config = state.asr_config.lock().unwrap().clone();
+                        config
+                    };
+                    let backend_name = format!("{:?}", config.backend);
+                    match transcribe_file(&path, &config).await {
+                        Ok(text) => {
+                            let segment = TranscriptSegment {
+                                index,
+                                text: text.clone(),
+                                backend: backend_name,
+                            };
+                            {
+                                let state = consumer_handle.state::<AppState>();
+                                let mut transcript = state.transcript.lock().unwrap();
+                                transcript.push(segment.clone());
+                            }
+                            let _ = consumer_handle.emit("asr:segment", segment);
+                        }
+                        Err(e) => {
+                            let _ = consumer_handle.emit("audio:error", e);
+                        }
+                    }
+                }
+            });
+
             start_auto_save_loop(handle);
             Ok(())
         })
@@ -422,10 +589,12 @@ pub fn run() {
                 model_name: None,
                 language: Some("zh".to_string()),
             }),
+            tts_config: Mutex::new(TtsConfig::default()),
             transcript: Mutex::new(Vec::new()),
             settings: Mutex::new(AppSettings::default()),
             last_auto_save_hash: Mutex::new(None),
             db: Mutex::new(None),
+            slice_queue_tx: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             list_devices,
@@ -434,11 +603,19 @@ pub fn run() {
             get_asr_config,
             set_asr_config,
             get_asr_backend_status,
+            get_tts_config,
+            set_tts_config,
+            get_tts_backend_status,
+            list_tts_voices,
+            synthesize_tts,
+            copy_tts_file,
+            read_tts_file_base64,
             get_asr_profiles,
             add_asr_profile,
             update_asr_profile,
             delete_asr_profile,
             warmup_mlx_model,
+            warmup_sensevoice_model,
             start_recording,
             stop_recording,
             transcribe_file_cmd,

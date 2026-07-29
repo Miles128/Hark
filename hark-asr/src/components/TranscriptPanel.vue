@@ -124,11 +124,11 @@ async function copyAll() {
 }
 
 .clear-btn {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
   background: transparent;
-  padding: 5px 10px;
+  padding: 3px 8px;
   border-radius: var(--radius-sm);
 }
 
@@ -139,15 +139,15 @@ async function copyAll() {
 .actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .action-btn {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
   background: transparent;
-  padding: 5px 10px;
+  padding: 3px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }

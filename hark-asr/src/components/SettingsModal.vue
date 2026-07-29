@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from "vue";
+import { ref, watch } from "vue";
 import type { AsrBackend, AsrProfile } from "../types/asr";
+import type { ThemeMode } from "../utils/theme";
 
-export type ThemeMode = "system" | "light" | "dark";
 export type AutoSaveInterval = 0 | 30 | 60 | 120 | 300 | 600;
 export type AutoSaveFormat = "txt" | "md";
 
@@ -56,28 +56,10 @@ watch(
   { deep: true }
 );
 
-function applyTheme(theme: ThemeMode) {
-  const root = document.documentElement;
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const isDark = theme === "dark" || (theme === "system" && prefersDark);
-  if (isDark) {
-    root.classList.add("dark");
-  } else {
-    root.classList.remove("dark");
-  }
-}
-
 function update<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
   local.value = { ...local.value, [key]: value };
   emit("update:settings", local.value);
-  if (key === "theme") {
-    applyTheme(value as ThemeMode);
-  }
 }
-
-onMounted(() => {
-  applyTheme(props.settings.theme);
-});
 
 const tabs: { key: SettingsTab; label: string }[] = [
   { key: "general", label: "通用" },
@@ -91,6 +73,7 @@ function isInstalled(backend: string) {
 
 const backendTypes: { value: AsrBackend; label: string }[] = [
   { value: "MlxQwen3", label: "mlx-qwen3-asr（本地）" },
+  { value: "SenseVoice", label: "SenseVoice（本地）" },
   { value: "WhisperCpp", label: "whisper.cpp（本地）" },
   { value: "DashScope", label: "DashScope（联网）" },
   { value: "OpenAiWhisper", label: "OpenAI Whisper（联网）" },
@@ -275,6 +258,13 @@ const formatOptions: { value: AutoSaveFormat; label: string }[] = [
                     </div>
                   </template>
 
+                  <template v-if="editingProfile.backend === 'SenseVoice'">
+                    <div class="field mini">
+                      <label>模型路径</label>
+                      <input v-model="editingProfile.modelName" placeholder="~/models/mlx-community/SenseVoiceSmall" />
+                    </div>
+                  </template>
+
                   <template v-if="editingProfile.backend === 'WhisperCpp'">
                     <div class="field mini">
                       <label>whisper-cli 路径</label>
@@ -296,6 +286,10 @@ const formatOptions: { value: AutoSaveFormat; label: string }[] = [
                     <div v-if="warmupStatus" class="warmup-msg" :class="warmupStatus.status">
                       {{ warmupStatus.message }}
                     </div>
+                  </div>
+
+                  <div v-if="editingProfile.backend === 'SenseVoice'" class="warmup-block">
+                    <p class="setting-hint">模型路径默认为 ~/models/mlx-community/SenseVoiceSmall</p>
                   </div>
 
                   <div class="form-actions">
