@@ -1,0 +1,43 @@
+name: Hark
+options:
+  bundleIdPrefix: com.sihai
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+targets:
+  Hark:
+    type: application
+    platform: macOS
+    sources:
+      - Hark
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sihai.hark
+        PRODUCT_NAME: Hark
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Hark 需要使用麦克风进行录音转写。"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Automatic
+  HarkTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - HarkTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Hark
+schemes:
+  Hark:
+    build:
+      targets:
+        Hark: all
+        HarkTests: [test]
+    test:
+      targets:
+        - HarkTests
