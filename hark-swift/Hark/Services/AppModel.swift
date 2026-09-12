@@ -4,6 +4,11 @@ import AVFoundation
 enum AppMode: String, CaseIterable { case asr, tts }
 enum AsrTab: String, CaseIterable { case recording, video }
 
+struct WarmupEvent: Equatable {
+    let status: String
+    let message: String
+}
+
 enum AudioSource: String, CaseIterable, Identifiable {
     case microphone, system, both
     var id: String { rawValue }
@@ -39,13 +44,22 @@ final class AppModel {
         didSet { persist(settings, to: Self.settingsURL) }
     }
     var profiles: [AsrProfile] = [] {
-        didSet { persist(profiles, to: Self.profilesURL) }
+        didSet {
+            persist(profiles, to: Self.profilesURL)
+            refreshAsrStatus()
+        }
     }
-    var selectedProfileId: String = ""
+    var selectedProfileId: String = "" {
+        didSet { refreshAsrStatus() }
+    }
     var segments: [Segment] = []
     var isTranscribing = false
     var errorMessage: String?
     var statusMessage: String?
+
+    // MARK: - 后端状态 / 模型预热
+    var backendStatus: [AsrBackendStatus] = []
+    var warmup: WarmupEvent?
 
     // MARK: - 录音状态
     let recorder = AudioRecorder()
@@ -63,6 +77,33 @@ final class AppModel {
 
     var activeProfile: AsrProfile? {
         profiles.first { $0.id == selectedProfileId }
+    }
+
+    func refreshAsrStatus() {
+        let bridge = try? PythonBridge()
+        backendStatus = AsrStatus.all(bridge: bridge, profiles: profiles, activeProfile: activeProfile)
+    }
+
+    /// 预热本地模型（MLX qwen3-asr / SenseVoice），首次会触发权重下载。
+    func warmupModel() async {
+        guard let profile = activeProfile, profile.backend.needsWarmup else { return }
+        warmup = WarmupEvent(status: "downloading", message: profile.backend.warmupMessage)
+        do {
+            let bridge = try PythonBridge()
+            let script: String
+            switch profile.backend {
+            case .mlxQwen3:
+                script = MlxQwen3Backend.warmupScript()
+            case .sensevoice:
+                script = SenseVoiceBackend.warmupScript(model: profile.modelName)
+            default:
+                return
+            }
+            _ = try await bridge.runAsync(script, extraEnv: MlxQwen3Backend.hfEnv)
+            warmup = WarmupEvent(status: "ready", message: "模型就绪")
+        } catch {
+            warmup = WarmupEvent(status: "error", message: error.localizedDescription)
+        }
     }
 
     func loadDevices() {
@@ -136,6 +177,7 @@ final class AppModel {
             selectedProfileId = profiles.first?.id ?? ""
         }
         segments = Self.load(Self.segmentsURL) ?? []
+        refreshAsrStatus()
     }
 
     private static func defaultProfiles() -> [AsrProfile] {
@@ -291,8 +333,10 @@ final class AppModel {
         isTranscribing = true
         defer { isTranscribing = false }
         do {
-            let bridge = try PythonBridge()
-            let backend = try AsrRouter.backend(for: profile.backend, bridge: bridge)
+            let backend = try AsrRouter.backend(
+                for: profile.backend,
+                bridge: try? PythonBridge()
+            )
             let text = try await backend.transcribe(
                 fileURL: url,
                 apiKey: profile.apiKey,

@@ -29,7 +29,16 @@ enum AsrBackend: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    var isAvailable: Bool { self == .dashscope }
+    /// 该后端是否需要预热（首次加载/下载模型）。
+    var needsWarmup: Bool { self == .mlxQwen3 || self == .sensevoice }
+
+    var warmupMessage: String {
+        switch self {
+        case .mlxQwen3: "正在准备 mlx-qwen3-asr 模型（首次使用需下载）…"
+        case .sensevoice: "正在加载 SenseVoice 模型…"
+        default: "正在预热模型…"
+        }
+    }
 
     var themeColorHex: UInt32 {
         switch self {

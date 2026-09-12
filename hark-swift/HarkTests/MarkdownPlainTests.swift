@@ -41,6 +41,10 @@ final class TtsServiceTests: XCTestCase {
         XCTAssertEqual(TtsService.pythonStr("hi"), #""hi""#)
         XCTAssertEqual(TtsService.pythonStr("he said \"ok\""), "\"he said \\\"ok\\\"\"")
         XCTAssertEqual(TtsService.pythonStr("中文"), "\"中文\"")
+        XCTAssertEqual(
+            TtsService.pythonStr("/Users/me/Library/Application Support/Hark/tts/a.mp3"),
+            #""/Users/me/Library/Application Support/Hark/tts/a.mp3""#
+        )
     }
 
     func testCosyVoiceVoiceList() {

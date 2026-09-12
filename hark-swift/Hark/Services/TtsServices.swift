@@ -136,7 +136,7 @@ enum TtsService {
 
             asyncio.run(main())
             """
-            try await bridge.runAsync(script)
+            _ = try await bridge.runAsync(script)
         case .cosyVoice:
             guard bridge.isPackageInstalled("dashscope") else {
                 throw TtsError.notInstalled("pip install --target=pylibs dashscope")
@@ -163,7 +163,7 @@ enum TtsService {
                 f.write(data)
             print(output_path)
             """
-            try await bridge.runAsync(script)
+            _ = try await bridge.runAsync(script)
         }
 
         guard FileManager.default.fileExists(atPath: outURL.path) else {
@@ -185,13 +185,9 @@ enum TtsService {
         TtsVoice(id: "loongbella", name: "Bella（女声·英文）", locale: "en-US", gender: "Female"),
     ]
 
-    /// Python 字符串字面量：JSON 双引号字符串是合法的 Python 字面量。
+    /// Python 字符串字面量，与 ASR 侧共用同一套转义规则。
     static func pythonStr(_ s: String) -> String {
-        guard let data = try? JSONEncoder().encode(s),
-              let literal = String(data: data, encoding: .utf8) else {
-            return "\"\""
-        }
-        return literal
+        PythonBridge.pythonLiteral(s)
     }
 
     /// 将 Edge 风格 `+0%` / `-20%` 转为 CosyVoice 的 0.5–2.0 倍速。

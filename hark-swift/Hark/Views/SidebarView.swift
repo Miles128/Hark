@@ -382,6 +382,7 @@ struct BackendSelectorView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(palette.textSecondary)
             ForEach(model.profiles) { profile in
+                let installed = model.backendStatus.first { $0.backend == profile.backend }?.installed ?? false
                 Button {
                     model.selectedProfileId = profile.id
                     model.settings.activeProfileId = profile.id
@@ -399,6 +400,11 @@ struct BackendSelectorView: View {
                                 .foregroundColor(palette.textTertiary)
                         }
                         Spacer()
+                        if !installed {
+                            Text("未安装")
+                                .font(.system(size: 10))
+                                .foregroundColor(palette.warning)
+                        }
                         if profile.id == model.selectedProfileId {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 10, weight: .bold))
@@ -411,15 +417,37 @@ struct BackendSelectorView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("后端状态检测将随 M2 接入")
-                .font(.system(size: 10))
-                .foregroundColor(palette.textTertiary)
+
+            if model.activeProfile?.backend.needsWarmup == true {
+                HStack(spacing: 6) {
+                    Button("预热模型") {
+                        Task { await model.warmupModel() }
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.link)
+                    .disabled(model.warmup?.status == "downloading")
+                    if let warmup = model.warmup {
+                        Text(warmup.message)
+                            .font(.system(size: 10))
+                            .foregroundColor(warmupColor(warmup.status))
+                            .lineLimit(2)
+                    }
+                }
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.surface)
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.border))
         .cornerRadius(10)
+    }
+
+    private func warmupColor(_ status: String) -> Color {
+        switch status {
+        case "error": palette.danger
+        case "ready": palette.success
+        default: palette.textTertiary
+        }
     }
 }
 
@@ -564,7 +592,7 @@ struct TtsControlsView: View {
             model.refreshTtsStatus()
             await model.loadTtsVoices()
         }
-        .onChange(of: model.ttsBackend) { _ in
+        .onChange(of: model.ttsBackend) { _, _ in
             model.localeFilter = "all"
             model.voiceQuery = ""
             model.ttsVoiceId = model.ttsBackend == .cosyVoice ? "longxiaochun" : "zh-CN-XiaoxiaoNeural"

@@ -29,9 +29,12 @@ final class AppModelsTests: XCTestCase {
         XCTAssertEqual(decoded.index, 0)
     }
 
-    func testBackendAvailability() {
-        XCTAssertTrue(AsrBackend.dashscope.isAvailable)
-        XCTAssertFalse(AsrBackend.mlxQwen3.isAvailable)
+    func testBackendWarmupFlags() {
+        XCTAssertTrue(AsrBackend.mlxQwen3.needsWarmup)
+        XCTAssertTrue(AsrBackend.sensevoice.needsWarmup)
+        XCTAssertFalse(AsrBackend.dashscope.needsWarmup)
+        XCTAssertFalse(AsrBackend.whisperCpp.needsWarmup)
+        XCTAssertFalse(AsrBackend.openaiWhisper.needsWarmup)
     }
 
     func testPaletteLightDarkDiffer() {
@@ -42,11 +45,13 @@ final class AppModelsTests: XCTestCase {
 }
 
 final class PythonBridgeTests: XCTestCase {
+    /// 从 DerivedData 启动时 cwd 是 "/"，必须靠 bundle / DerivedData 记录回源码目录。
     func testLocateProjectRootFindsPylibs() throws {
-        guard FileManager.default.fileExists(atPath: "../pylibs") || FileManager.default.fileExists(atPath: "pylibs") else {
-            throw XCTSkip("pylibs 目录不存在，跳过")
+        guard let root = PythonBridge.locateProjectRoot() else {
+            throw XCTSkip("本机未克隆 Hark 仓库")
         }
-        XCTAssertNotNil(PythonBridge.locateProjectRoot())
+        XCTAssertEqual(root.lastPathComponent, "hark-asr")
+        XCTAssertTrue(PythonBridge.isProjectRoot(root))
     }
 
     func testRunPythonPrintsOK() throws {
