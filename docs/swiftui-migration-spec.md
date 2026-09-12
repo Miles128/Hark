@@ -91,4 +91,5 @@ M1 用 A 起步，但 M2–M4 的"逐个换成 B"没有发生：五路 ASR、TTS
 - BlackHole 双路采集已按 AVAudioEngine 多 tap 实现，但**仍需在装了 BlackHole 的机器上实测**；本机未装，只验过禁用态样式
 - **`xcodebuild test` 宿主里 spawn Python 会挂**：解释器初始化阶段阻塞在 `os.listdir → open()`，连 `python -s -c "print('ok')"` 也不返回；同一条命令在普通 shell 里 19 ms 完成。测试宿主进程 `cwd=/`、stdin 是 tty、`PYTHONPATH` 指向 `~/Documents` 下的 pylibs（iCloud「桌面与文稿」同步开启），三者之一导致内核态等待。M5 期间 03:10 / 03:15 两次跑测这三条用例还是通过的，之后稳定复现挂起，故按环境问题处理
 - 麦克风权限：Info.plist `NSMicrophoneUsageDescription` 必填 —— 已配在 `project.yml`（`INFOPLIST_KEY_NSMicrophoneUsageDescription`）
+- **`@Observable` 的 `didSet` 在 `init` 里也会触发**（普通 class 不会）。M5 就栽在这一点上：AppModel 启动时的赋值链让 `settings` 的 didSet 跑起来，每次开 App 都重写一遍与 Tauri 共享的 `settings.json`，而 Rust 只在 `set_app_settings` 时写盘。用"语义未变就不写"抵消。**任何 @Observable + didSet 持久化的组合都要按这个前提设计**，LearnEnglish 迁移同理
 - 顺带暴露：`PythonBridge.run` / `UrlAudioDownloader.download` 都是 `readDataToEndOfFile()` + `waitUntilExit()`，**没有超时**，子进程卡死会永久占住一条 userInitiated 工作线程。方案 B（真原生推理）落地前值得补上
