@@ -88,6 +88,19 @@ extension Color {
     }
 }
 
+extension AsrBackend {
+    /// 对应 backendMeta[...].color：mlx / SenseVoice 走主题变量，其余是固定色。
+    func tintColor(in palette: Palette) -> Color {
+        switch self {
+        case .mlxQwen3: palette.accent
+        case .sensevoice: palette.success
+        case .whisperCpp: Color(hex: 0x5856D6)
+        case .dashscope: Color(hex: 0xFF6B00)
+        case .openaiWhisper: Color(hex: 0x10A37F)
+        }
+    }
+}
+
 private struct PaletteKey: EnvironmentKey {
     static let defaultValue: Palette = .light
 }
