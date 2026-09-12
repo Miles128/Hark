@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import type { AsrBackend, AsrProfile } from "../types/asr";
-import type { ThemeMode } from "../utils/theme";
+import { applyTheme, type ThemeMode } from "../utils/theme";
 
 export type AutoSaveInterval = 0 | 30 | 60 | 120 | 300 | 600;
 export type AutoSaveFormat = "txt" | "md";
@@ -58,7 +58,10 @@ watch(
 
 function update<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
   local.value = { ...local.value, [key]: value };
-  emit("update:settings", local.value);
+  if (key === "theme") {
+    applyTheme(String(value));
+  }
+  emit("update:settings", { ...local.value });
 }
 
 const tabs: { key: SettingsTab; label: string }[] = [

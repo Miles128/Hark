@@ -32,28 +32,10 @@
 
   --sidebar-width: 320px;
   --sidebar-collapsed: 56px;
+  color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d0d0d;
-    --surface: #1c1c1e;
-    --surface-hover: #2c2c2e;
-    --text-primary: #f5f5f7;
-    --text-secondary: #8e8e93;
-    --text-tertiary: #636366;
-    --accent: #0a84ff;
-    --accent-hover: #409cff;
-    --accent-soft: rgba(10, 132, 255, 0.12);
-    --danger: #ff453a;
-    --danger-hover: #ff6961;
-    --success: #30d158;
-    --warning: #ff9f0a;
-    --border: rgba(255, 255, 255, 0.1);
-    --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-  }
-}
-
+/* 仅由 JS 的 .dark 控制，避免系统深色覆盖用户选的浅色 */
 :root.dark {
   --bg: #0d0d0d;
   --surface: #1c1c1e;
@@ -70,6 +52,7 @@
   --warning: #ff9f0a;
   --border: rgba(255, 255, 255, 0.1);
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
 }
 
 * {

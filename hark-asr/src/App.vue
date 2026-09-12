@@ -326,18 +326,6 @@ async function warmupMlxModel() {
   <div class="app">
     <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header" data-tauri-drag-region>
-        <div class="header-spacer" />
-        <div class="header-actions">
-          <button class="settings-btn" @click="settingsOpen = true" title="设置">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 0 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 0 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 0 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 0 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
-          </button>
-          <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed">
-            {{ sidebarCollapsed ? "›" : "‹" }}
-          </button>
-        </div>
-      </div>
-
-      <div class="sidebar-content">
         <div class="mode-switcher">
           <button
             class="mode-btn"
@@ -354,7 +342,20 @@ async function warmupMlxModel() {
             TTS
           </button>
         </div>
+        <div class="header-actions">
+          <button class="settings-btn" @click="settingsOpen = true" title="设置">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+          <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed">
+            {{ sidebarCollapsed ? "›" : "‹" }}
+          </button>
+        </div>
+      </div>
 
+      <div class="sidebar-content">
         <template v-if="activeMode === 'asr'">
           <div class="tab-switcher">
             <button
@@ -481,28 +482,26 @@ async function warmupMlxModel() {
 .sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 8px;
   padding: 10px 12px 8px;
   -webkit-app-region: drag;
   app-region: drag;
-}
-
-.header-spacer {
-  flex: 1;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
 .settings-btn,
 .collapse-btn {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   border-radius: 6px;
   display: flex;
   align-items: center;
@@ -525,6 +524,10 @@ async function warmupMlxModel() {
 
 .sidebar.collapsed .collapse-btn {
   transform: rotate(180deg);
+}
+
+.sidebar.collapsed .mode-switcher {
+  display: none;
 }
 
 .sidebar-content {
@@ -553,23 +556,28 @@ async function warmupMlxModel() {
 
 .mode-switcher {
   display: flex;
+  flex: 1;
+  min-width: 0;
   gap: 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   overflow: hidden;
-  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .mode-btn {
   flex: 1;
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 0 14px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.4px;
   color: var(--text-secondary);
   background: transparent;
   transition: var(--transition);
   border-right: 1px solid var(--border);
+  line-height: 1;
+  height: 32px;
 }
 
 .mode-btn:last-child {
