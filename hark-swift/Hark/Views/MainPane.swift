@@ -10,7 +10,7 @@ struct MainPane: View {
             if model.mode == .asr {
                 TranscriptPanelView()
             } else {
-                TtsPanelView()
+                TtsPanelView(text: $model.ttsText)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -149,13 +149,46 @@ struct TranscriptPanelView: View {
 // MARK: - TTS 文本面板（对齐 TtsPanel.vue）
 
 struct TtsPanelView: View {
+    @Binding var text: String
     @Environment(\.palette) private var palette
 
     var body: some View {
-        ContentUnavailableView(
-            "TTS 合成",
-            systemImage: "waveform.badge.mic",
-            description: Text("文本转语音将在 M3 里程碑接入")
-        )
+        VStack(spacing: 0) {
+            HStack {
+                Text("可粘贴 Markdown；朗读时不念格式符，按标题/段落/列表自动停顿")
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.textSecondary)
+                Spacer()
+                Text("\(text.count) 字")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 41)
+            .background(palette.surface)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(palette.border).frame(height: 1)
+            }
+
+            TextEditor(text: $text)
+                .font(.system(size: 15))
+                .lineSpacing(6)
+                .scrollContentBackground(.hidden)
+                .background(palette.surface)
+                .foregroundStyle(palette.textPrimary)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text("在此粘贴或输入要朗读的文字…")
+                            .font(.system(size: 15))
+                            .foregroundColor(palette.textTertiary)
+                            .padding(.top, 12)
+                            .padding(.leading, 8)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .padding(.horizontal, 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.surface)
     }
 }

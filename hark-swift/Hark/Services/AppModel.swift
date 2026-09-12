@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 enum AppMode: String, CaseIterable { case asr, tts }
 enum AsrTab: String, CaseIterable { case recording, video }
@@ -149,6 +150,111 @@ final class AppModel {
     private func persist<T: Encodable>(_ value: T, to url: URL) {
         if let data = try? JSONEncoder().encode(value) {
             try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    // MARK: - TTS 状态
+    var ttsBackend: TtsBackendKind = .edge
+    var ttsVoiceId = "zh-CN-XiaoxiaoNeural"
+    var ratePercent = 0
+    var voiceQuery = ""
+    var localeFilter = "all"
+    var ttsVoices: [TtsVoice] = []
+    var ttsStatus: [TtsBackendStatus] = []
+    var isSynthesizing = false
+    var lastTtsPath: String?
+    var ttsError: String?
+    var ttsText = ""
+    private var audioPlayer: AVAudioPlayer?
+
+    var rateStr: String { ratePercent >= 0 ? "+\(ratePercent)%" : "\(ratePercent)%" }
+
+    var dashscopeApiKey: String {
+        if let p = activeProfile, p.backend == .dashscope, !p.apiKey.isEmpty {
+            return p.apiKey
+        }
+        return profiles.first { $0.backend == .dashscope && !$0.apiKey.isEmpty }?.apiKey ?? ""
+    }
+
+    var locales: [String] {
+        Array(Set(ttsVoices.map(\.locale).filter { !$0.isEmpty })).sorted()
+    }
+
+    var filteredTtsVoices: [TtsVoice] {
+        let q = voiceQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        return ttsVoices.filter { v in
+            if localeFilter != "all" && v.locale != localeFilter { return false }
+            if q.isEmpty { return true }
+            return v.id.lowercased().contains(q)
+                || v.name.lowercased().contains(q)
+                || v.locale.lowercased().contains(q)
+                || v.gender.lowercased().contains(q)
+        }
+    }
+
+    func refreshTtsStatus() {
+        guard let bridge = try? PythonBridge() else {
+            ttsStatus = []
+            return
+        }
+        ttsStatus = TtsService.backendStatus(bridge: bridge)
+    }
+
+    func loadTtsVoices() async {
+        ttsError = nil
+        guard let bridge = try? PythonBridge() else {
+            ttsVoices = []
+            ttsError = PythonBridgeError.pylibsNotFound.localizedDescription
+            return
+        }
+        do {
+            ttsVoices = try await TtsService.listVoices(ttsBackend, bridge: bridge)
+            if !ttsVoices.contains(where: { $0.id == ttsVoiceId }) {
+                let zh = ttsVoices.first { $0.locale.hasPrefix("zh") }
+                ttsVoiceId = zh?.id ?? ttsVoices.first?.id ?? ttsVoiceId
+            }
+        } catch {
+            ttsVoices = []
+            ttsError = error.localizedDescription
+        }
+    }
+
+    /// 合成当前文本（markdown → 朗读文本），返回文件路径。
+    func synthesizeText(_ rawText: String) async throws -> String {
+        let speech = MarkdownPlain.toSpeech(rawText)
+        if speech.isEmpty {
+            throw TtsError.emptyText
+        }
+        if ttsBackend == .cosyVoice && dashscopeApiKey.isEmpty {
+            throw TtsError.missingAPIKey
+        }
+        let config = TtsConfig(
+            backend: ttsBackend,
+            apiKey: ttsBackend == .cosyVoice ? dashscopeApiKey : "",
+            voice: ttsVoiceId,
+            rate: rateStr
+        )
+        let bridge = try PythonBridge()
+        let result = try await TtsService.synthesize(speech, config: config, bridge: bridge)
+        lastTtsPath = result.path
+        return result.path
+    }
+
+    func synthesizeAndPlay(_ rawText: String) async {
+        guard !rawText.trimmingCharacters(in: .whitespaces).isEmpty else {
+            ttsError = "请先粘贴或输入文字"
+            return
+        }
+        isSynthesizing = true
+        ttsError = nil
+        defer { isSynthesizing = false }
+        do {
+            let path = try await synthesizeText(rawText)
+            let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+            self.audioPlayer = player
+            player.play()
+        } catch {
+            ttsError = error.localizedDescription
         }
     }
 

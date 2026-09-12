@@ -6,7 +6,6 @@ struct SidebarView: View {
     @State private var model = AppModel.shared
     @Environment(\.palette) private var palette
     @State private var videoURL = ""
-    @State private var ttsText = ""
     @State private var showFilePicker = false
 
     var body: some View {
@@ -97,7 +96,7 @@ struct SidebarView: View {
                         VideoDownloadPanelView(url: $videoURL)
                     }
                 } else {
-                    TtsControlsView(text: $ttsText)
+                    TtsControlsView(text: $model.ttsText)
                 }
             }
             .padding(.horizontal, 12)
@@ -460,36 +459,193 @@ struct VideoDownloadPanelView: View {
     }
 }
 
-// MARK: - TTS 控制区（M3 接入合成）
+// MARK: - TTS 控制区（对齐 TtsControls.vue）
 
 struct TtsControlsView: View {
     @Binding var text: String
+    @State private var model = AppModel.shared
     @Environment(\.palette) private var palette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("文本转语音")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(palette.textSecondary)
-            TextEditor(text: $text)
-                .font(.system(size: 12))
-                .frame(minHeight: 120)
-                .scrollContentBackground(.hidden)
-                .background(palette.surfaceHover)
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.border))
-                .cornerRadius(6)
-            Button("开始合成") {}
-                .buttonStyle(.borderedProminent)
-                .tint(palette.accent)
-                .disabled(true)
-            Text("Edge / CosyVoice 合成将在 M3 里程碑接入")
-                .font(.system(size: 10))
-                .foregroundColor(palette.textTertiary)
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("引擎")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+                HStack(spacing: 6) {
+                    backendChip(.edge)
+                    backendChip(.cosyVoice)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("语速 \(model.rateStr)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+                Slider(
+                    value: Binding(
+                        get: { Double(model.ratePercent) },
+                        set: { model.ratePercent = Int(($0 / 5).rounded() * 5) }
+                    ),
+                    in: -50...100,
+                    step: 5
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("音色")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(palette.textSecondary)
+                HStack(spacing: 6) {
+                    Picker("", selection: $model.localeFilter) {
+                        Text("全部语言").tag("all")
+                        ForEach(model.locales, id: \.self) { loc in
+                            Text(loc).tag(loc)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 110)
+                    .font(.system(size: 12))
+                    TextField("搜索音色…", text: $model.voiceQuery)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                }
+                voiceList
+            }
+
+            VStack(spacing: 6) {
+                Button {
+                    Task { await model.synthesizeAndPlay(text) }
+                } label: {
+                    Text(model.isSynthesizing ? "合成中…" : "生成并播放")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(palette.accent)
+                        .foregroundColor(.white)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isSynthesizing)
+
+                Button {
+                    exportAudio()
+                } label: {
+                    Text("导出音频")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .overlay(Capsule().strokeBorder(palette.border))
+                        .foregroundColor(palette.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isSynthesizing)
+            }
+
+            if let path = model.lastTtsPath {
+                Text("已生成 \(path)")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            if let error = model.ttsError {
+                Text(error)
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.danger)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(palette.danger.opacity(0.08))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.danger.opacity(0.15)))
+                    .cornerRadius(6)
+            }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.surface)
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.border))
-        .cornerRadius(10)
+        .task {
+            model.refreshTtsStatus()
+            await model.loadTtsVoices()
+        }
+        .onChange(of: model.ttsBackend) { _ in
+            model.localeFilter = "all"
+            model.voiceQuery = ""
+            model.ttsVoiceId = model.ttsBackend == .cosyVoice ? "longxiaochun" : "zh-CN-XiaoxiaoNeural"
+            Task { await model.loadTtsVoices() }
+        }
+    }
+
+    private func backendChip(_ kind: TtsBackendKind) -> some View {
+        let installed = model.ttsStatus.first { $0.backend == kind.rawValue }?.installed ?? false
+        let active = model.ttsBackend == kind
+        return Button {
+            model.ttsBackend = kind
+        } label: {
+            HStack(spacing: 6) {
+                Text(kind.title)
+                    .font(.system(size: 12, weight: .medium))
+                Circle()
+                    .fill(active && installed ? Color.white : (installed ? palette.success : palette.textTertiary))
+                    .frame(width: 6, height: 6)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 26)
+            .background(active ? palette.accent : .clear)
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(active ? palette.accent : palette.border))
+            .foregroundColor(active ? .white : palette.textSecondary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var voiceList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(model.filteredTtsVoices) { v in
+                    Button {
+                        model.ttsVoiceId = v.id
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(v.name)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(palette.textPrimary)
+                            Text("\(v.locale) · \(v.gender.isEmpty ? "—" : v.gender)")
+                                .font(.system(size: 10))
+                                .foregroundColor(palette.textTertiary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 10)
+                        .background(model.ttsVoiceId == v.id ? palette.accentSoft : .clear)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(palette.border).frame(height: 1)
+                    }
+                }
+                if model.filteredTtsVoices.isEmpty {
+                    Text("无匹配音色")
+                        .font(.system(size: 12))
+                        .foregroundColor(palette.textTertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                }
+            }
+        }
+        .frame(maxHeight: 180)
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.border))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func exportAudio() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "hark-tts-\(Int(Date().timeIntervalSince1970 * 1000)).mp3"
+        panel.allowedContentTypes = [.mp3]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        Task {
+            do {
+                let src = try await model.synthesizeText(text)
+                try FileManager.default.removeItem(at: dest)
+                try FileManager.default.copyItem(atPath: src, toPath: dest.path)
+            } catch {
+                model.ttsError = error.localizedDescription
+            }
+        }
     }
 }
