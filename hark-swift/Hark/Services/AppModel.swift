@@ -3,6 +3,25 @@ import Foundation
 enum AppMode: String, CaseIterable { case asr, tts }
 enum AsrTab: String, CaseIterable { case recording, video }
 
+enum AudioSource: String, CaseIterable, Identifiable {
+    case microphone, system, both
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .microphone: "麦克风"
+        case .system: "系统"
+        case .both: "双通道"
+        }
+    }
+    var recorderKind: AudioSourceKind {
+        switch self {
+        case .microphone: .microphone
+        case .system: .system
+        case .both: .both
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class AppModel {
@@ -27,8 +46,75 @@ final class AppModel {
     var errorMessage: String?
     var statusMessage: String?
 
+    // MARK: - 录音状态
+    let recorder = AudioRecorder()
+    var devices: [AudioDeviceInfo] = []
+    var micDeviceName = ""
+    var systemDeviceName = ""
+    var source: AudioSource = .microphone
+    var liveTranscribe = false
+    var recordedFileURL: URL?
+    var hasBlackhole = false
+
+    var isRecording: Bool { recorder.isRecording }
+    var volumeDb: Float { recorder.db }
+    var volumeLevel: Double { recorder.level }
+
     var activeProfile: AsrProfile? {
         profiles.first { $0.id == selectedProfileId }
+    }
+
+    func loadDevices() {
+        devices = CoreAudioDevices.inputDevices()
+        hasBlackhole = CoreAudioDevices.hasBlackhole()
+        if micDeviceName.isEmpty {
+            let builtin = devices.first {
+                $0.name.localizedCaseInsensitiveContains("macbook") || $0.name.localizedCaseInsensitiveContains("built-in")
+            } ?? devices.first {
+                $0.name.localizedCaseInsensitiveContains("microphone") || $0.name.contains("麦克风")
+            }
+            micDeviceName = builtin?.name ?? devices.first?.name ?? ""
+        }
+        if systemDeviceName.isEmpty {
+            systemDeviceName = devices.first { $0.name.contains("BlackHole") }?.name ?? ""
+        }
+    }
+
+    func toggleRecording() async {
+        if isRecording {
+            stopAndTranscribe()
+        } else {
+            await startRecording()
+        }
+    }
+
+    private func startRecording() async {
+        errorMessage = nil
+        statusMessage = nil
+        segments = []
+        recordedFileURL = nil
+
+        let mic = devices.first { $0.name == micDeviceName }
+        let system = devices.first { $0.name == systemDeviceName }
+        do {
+            try recorder.startRecording(
+                source: source.recorderKind,
+                micDevice: mic,
+                systemDevice: system
+            )
+            statusMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// 停止录音；边录边转关掉时立即转写整段。
+    private func stopAndTranscribe() {
+        guard let url = recorder.stopRecording() else { return }
+        recordedFileURL = url
+        if !liveTranscribe {
+            Task { await transcribeFile(at: url) }
+        }
     }
 
     // MARK: - 持久化

@@ -5,8 +5,6 @@ import AppKit
 struct SidebarView: View {
     @State private var model = AppModel.shared
     @Environment(\.palette) private var palette
-    @State private var source = AudioSource.microphone
-    @State private var liveTranscribe = false
     @State private var videoURL = ""
     @State private var ttsText = ""
     @State private var showFilePicker = false
@@ -26,6 +24,7 @@ struct SidebarView: View {
             Rectangle().fill(palette.border).frame(width: 1)
         }
         .animation(.easeInOut(duration: 0.25), value: model.sidebarCollapsed)
+        .task { model.loadDevices() }
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.audio, .movie]) { result in
             if case .success(let url) = result {
                 Task { await model.transcribeFile(at: url) }
@@ -75,12 +74,18 @@ struct SidebarView: View {
                     TabSwitcher(tab: $model.tab)
                     switch model.tab {
                     case .recording:
-                        SourceSelectorView(source: $source)
-                        VolumeMeterView()
+                        SourceSelectorView()
+                        VolumeMeterView(db: model.volumeDb, level: model.volumeLevel, isRecording: model.isRecording)
                         BackendSelectorView()
                         recordCard
                         if model.isTranscribing {
                             statusText("正在转写…\n本地模型首次加载较慢，请稍等")
+                        }
+                        if model.isRecording {
+                            statusText("录音中…")
+                        }
+                        if let url = model.recordedFileURL, !model.isRecording, !model.liveTranscribe {
+                            statusText("已保存 \(url.lastPathComponent)")
                         }
                         if let status = model.statusMessage {
                             statusText(status)
@@ -106,18 +111,18 @@ struct SidebarView: View {
     private var recordCard: some View {
         VStack(spacing: 8) {
             Button {
-                model.errorMessage = "录音链路将在 M2 里程碑接入，当前可先用下方「导入音频文件」转写"
+                Task { await model.toggleRecording() }
             } label: {
                 HStack(spacing: 8) {
                     Circle()
                         .fill(Color.white)
                         .frame(width: 8, height: 8)
-                    Text("录音")
+                    Text(model.isRecording ? "停止" : "录音")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
-                .background(palette.accent)
+                .background(model.isRecording ? palette.danger : palette.accent)
                 .foregroundColor(.white)
                 .clipShape(Capsule())
             }
@@ -135,13 +140,14 @@ struct SidebarView: View {
             .tint(palette.accent)
             .disabled(model.isTranscribing)
 
-            Toggle(isOn: $liveTranscribe) {
+            Toggle(isOn: $model.liveTranscribe) {
                 Text("边录边转")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(palette.textPrimary)
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
+            .disabled(model.isRecording)
             .padding(6)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
@@ -246,20 +252,8 @@ struct TabSwitcher: View {
 
 // MARK: - 声音来源
 
-enum AudioSource: String, CaseIterable, Identifiable {
-    case microphone, system, both
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .microphone: "麦克风"
-        case .system: "系统"
-        case .both: "双通道"
-        }
-    }
-}
-
 struct SourceSelectorView: View {
-    @Binding var source: AudioSource
+    @State private var model = AppModel.shared
     @Environment(\.palette) private var palette
 
     var body: some View {
@@ -267,26 +261,38 @@ struct SourceSelectorView: View {
             Text("声音来源")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(palette.textSecondary)
-            Picker("", selection: $source) {
+            Picker("", selection: $model.source) {
                 ForEach(AudioSource.allCases) { s in
                     Text(s.title).tag(s)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .disabled(model.isRecording)
 
-            if source != .microphone {
-                HStack(spacing: 6) {
-                    Circle().fill(palette.systemColor).frame(width: 7, height: 7)
-                    Text("系统声音经 BlackHole 采集（M2 接入设备枚举）")
+            if model.source != .microphone {
+                devicePicker(
+                    label: "系统声音设备",
+                    selection: $model.systemDeviceName,
+                    devices: model.devices.filter { $0.name.contains("BlackHole") },
+                    placeholder: model.hasBlackhole ? nil : "未检测到 BlackHole"
+                )
+                if !model.hasBlackhole {
+                    Text("系统声音需安装 BlackHole 并开启多输出设备")
                         .font(.system(size: 11))
                         .foregroundColor(palette.textTertiary)
                 }
             }
+            if model.source != .system {
+                devicePicker(
+                    label: "麦克风",
+                    selection: $model.micDeviceName,
+                    devices: model.devices.filter { !$0.name.contains("BlackHole") },
+                    placeholder: nil
+                )
+            }
             Button("打开音频 MIDI 设置") {
-                if let url = URL(string: "file:///System/Applications/Utilities/Audio%20MIDI%20Setup.app") {
-                    NSWorkspace.shared.open(url)
-                }
+                SystemAudio.openAudioMIDISetup()
             }
             .font(.system(size: 11))
             .buttonStyle(.link)
@@ -297,11 +303,43 @@ struct SourceSelectorView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.border))
         .cornerRadius(10)
     }
+
+    @ViewBuilder
+    private func devicePicker(
+        label: String,
+        selection: Binding<String>,
+        devices: [AudioDeviceInfo],
+        placeholder: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(palette.textSecondary)
+            if devices.isEmpty {
+                Text(placeholder ?? "没有可用设备")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.textTertiary)
+            } else {
+                Picker("", selection: selection) {
+                    ForEach(devices) { d in
+                        Text(d.name).tag(d.name)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .font(.system(size: 11))
+                .disabled(model.isRecording)
+            }
+        }
+    }
 }
 
-// MARK: - 音量条（M2 接实时电平）
+// MARK: - 音量条
 
 struct VolumeMeterView: View {
+    var db: Float
+    var level: Double
+    var isRecording: Bool
     @Environment(\.palette) private var palette
 
     var body: some View {
@@ -311,14 +349,17 @@ struct VolumeMeterView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(palette.textSecondary)
                 Spacer()
-                Text("-60 dB")
+                Text(String(format: "%.0f dB", db))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(palette.textTertiary)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(palette.surfaceHover)
-                    Capsule().fill(palette.success).frame(width: 2)
+                    Capsule()
+                        .fill(isRecording ? palette.success : palette.surfaceHover)
+                        .frame(width: max(2, geo.size.width * level))
+                        .animation(.linear(duration: 0.08), value: level)
                 }
             }
             .frame(height: 6)
