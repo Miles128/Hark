@@ -5,7 +5,6 @@ import AppKit
 struct SidebarView: View {
     @State private var model = AppModel.shared
     @Environment(\.palette) private var palette
-    @State private var videoURL = ""
     @State private var showFilePicker = false
 
     var body: some View {
@@ -93,7 +92,7 @@ struct SidebarView: View {
                             errorBanner(error)
                         }
                     case .video:
-                        VideoDownloadPanelView(url: $videoURL)
+                        VideoDownloadPanelView()
                     }
                 } else {
                     TtsControlsView(text: $model.ttsText)
@@ -257,79 +256,99 @@ struct SourceSelectorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("声音来源")
-                .font(.system(size: 12, weight: .semibold))
+            Text("录音源")
+                .font(.system(size: 11, weight: .semibold))
+                .kerning(0.4)
                 .foregroundColor(palette.textSecondary)
-            Picker("", selection: $model.source) {
-                ForEach(AudioSource.allCases) { s in
-                    Text(s.title).tag(s)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(model.isRecording)
 
-            if model.source != .microphone {
-                devicePicker(
-                    label: "系统声音设备",
-                    selection: $model.systemDeviceName,
-                    devices: model.devices.filter { $0.name.contains("BlackHole") },
-                    placeholder: model.hasBlackhole ? nil : "未检测到 BlackHole"
-                )
-                if !model.hasBlackhole {
-                    Text("系统声音需安装 BlackHole 并开启多输出设备")
-                        .font(.system(size: 11))
-                        .foregroundColor(palette.textTertiary)
+            HStack(spacing: 4) {
+                ForEach(AudioSource.allCases) { option in
+                    sourceChip(option)
                 }
             }
-            if model.source != .system {
-                devicePicker(
-                    label: "麦克风",
-                    selection: $model.micDeviceName,
-                    devices: model.devices.filter { !$0.name.contains("BlackHole") },
-                    placeholder: nil
-                )
+
+            if model.source == .microphone || model.source == .both {
+                deviceField(label: "麦克风设备", selection: $model.micDeviceName, options: model.micOptions)
             }
-            Button("打开音频 MIDI 设置") {
-                SystemAudio.openAudioMIDISetup()
+            if model.source == .system || model.source == .both {
+                deviceField(label: "系统音频设备", selection: $model.systemDeviceName, options: model.systemOptions)
             }
-            .font(.system(size: 11))
-            .buttonStyle(.link)
+
+            if !model.hasBlackhole {
+                blackholeWarning
+            }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.surface)
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.border))
-        .cornerRadius(10)
     }
 
-    @ViewBuilder
-    private func devicePicker(
-        label: String,
-        selection: Binding<String>,
-        devices: [AudioDeviceInfo],
-        placeholder: String?
-    ) -> some View {
+    private func sourceChip(_ option: AudioSource) -> some View {
+        let active = model.source == option
+        let disabled = option.needsBlackhole && !model.hasBlackhole
+        let color = Color(hex: option.optionColorHex)
+        return Button {
+            guard !disabled else { return }
+            model.source = option
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: option == .microphone ? "mic" : option == .system ? "dot.radiowaves.right" : "mic.fill")
+                    .font(.system(size: 11))
+                Text(option.title)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundColor(active ? .white : palette.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(active ? color : Color.clear)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(active ? color : palette.border)
+            )
+            .cornerRadius(6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+    }
+
+    private func deviceField(label: String, selection: Binding<String>, options: [AudioDeviceInfo]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(palette.textSecondary)
+            Picker("", selection: selection) {
+                Text("默认 / 自动").tag("")
+                ForEach(options) { device in
+                    Text(device.name).tag(device.name)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .font(.system(size: 12))
+            .disabled(model.isRecording)
+        }
+    }
+
+    private var blackholeWarning: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("未检测到 BlackHole。要录外放或同时录，请先安装 BlackHole，然后在「音频 MIDI 设置」里创建多输出设备。")
                 .font(.system(size: 11))
                 .foregroundColor(palette.textSecondary)
-            if devices.isEmpty {
-                Text(placeholder ?? "没有可用设备")
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.textTertiary)
-            } else {
-                Picker("", selection: selection) {
-                    ForEach(devices) { d in
-                        Text(d.name).tag(d.name)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .font(.system(size: 11))
-                .disabled(model.isRecording)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Link("下载 BlackHole", destination: URL(string: "https://github.com/ExistentialAudio/BlackHole")!)
+                    .font(.system(size: 11, weight: .medium))
+                Button("打开音频 MIDI 设置") { model.openAudioMidiSetup() }
+                    .font(.system(size: 11, weight: .medium))
             }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.warning.opacity(0.08))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.warning.opacity(0.2)))
+        .cornerRadius(6)
     }
 }
 
@@ -375,115 +394,384 @@ struct VolumeMeterView: View {
 struct BackendSelectorView: View {
     @State private var model = AppModel.shared
     @Environment(\.palette) private var palette
+    @State private var open = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("识别模型")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(palette.textSecondary)
-            ForEach(model.profiles) { profile in
-                let installed = model.backendStatus.first { $0.backend == profile.backend }?.installed ?? false
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("转写模型")
+                    .font(.system(size: 13, weight: .semibold))
+                    .kerning(0.5)
+                    .foregroundColor(palette.textSecondary)
+                Spacer()
+                if model.activeProfile != nil {
+                    Circle()
+                        .fill(isInstalled(model.activeProfile?.backend) ? palette.success : palette.warning)
+                        .frame(width: 7, height: 7)
+                }
+            }
+
+            ZStack(alignment: .topLeading) {
                 Button {
-                    model.selectedProfileId = profile.id
-                    model.settings.activeProfileId = profile.id
+                    open.toggle()
                 } label: {
                     HStack(spacing: 8) {
-                        Circle()
-                            .fill(Color(hex: profile.backend.themeColorHex))
-                            .frame(width: 8, height: 8)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(profile.name.isEmpty ? profile.backend.displayName : profile.name)
-                                .font(.system(size: 12, weight: .medium))
+                        if let current = model.activeProfile {
+                            backendIcon(current.backend, size: 18)
+                            Text(current.name)
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundColor(palette.textPrimary)
-                            Text(profile.backend.displayName)
-                                .font(.system(size: 10))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text(current.backend.sidebarLabel)
+                                .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(palette.textTertiary)
+                        } else {
+                            Text("未配置模型")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(palette.textTertiary)
+                            Spacer(minLength: 0)
                         }
-                        Spacer()
-                        if !installed {
-                            Text("未安装")
-                                .font(.system(size: 10))
-                                .foregroundColor(palette.warning)
-                        }
-                        if profile.id == model.selectedProfileId {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(palette.accent)
-                        }
+                        Image(systemName: "chevron.forward")
+                            .font(.system(size: 11, weight: .semibold))
+                            .rotationEffect(.degrees(open ? -90 : 90))
+                            .foregroundColor(palette.textSecondary)
                     }
-                    .padding(8)
-                    .background(profile.id == model.selectedProfileId ? palette.accentSoft : palette.surfaceHover)
-                    .cornerRadius(6)
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+                    .background(palette.surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(open ? palette.textTertiary : palette.border)
+                    )
+                    .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
-            }
+                .disabled(model.profiles.isEmpty)
+                .opacity(model.profiles.isEmpty ? 0.6 : 1)
 
-            if model.activeProfile?.backend.needsWarmup == true {
-                HStack(spacing: 6) {
-                    Button("预热模型") {
-                        Task { await model.warmupModel() }
+                if open && !model.profiles.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(model.profiles) { profile in
+                            let isSelected = profile.id == model.selectedProfileId
+                            Button {
+                                model.selectedProfileId = profile.id
+                                open = false
+                            } label: {
+                                HStack(spacing: 8) {
+                                    backendIcon(profile.backend, size: 16)
+                                    Text(profile.name)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(isSelected ? palette.accent : palette.textPrimary)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Text(profile.backend.sidebarLabel)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(palette.textTertiary)
+                                }
+                                .padding(8)
+                                .background(isSelected ? palette.accentSoft : Color.clear)
+                                .cornerRadius(6)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .font(.system(size: 11))
-                    .buttonStyle(.link)
-                    .disabled(model.warmup?.status == "downloading")
-                    if let warmup = model.warmup {
-                        Text(warmup.message)
-                            .font(.system(size: 10))
-                            .foregroundColor(warmupColor(warmup.status))
-                            .lineLimit(2)
-                    }
+                    .padding(4)
+                    .frame(maxWidth: .infinity)
+                    .background(palette.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.border))
+                    .cornerRadius(8)
+                    .padding(.top, 42)
+                    .zIndex(20)
                 }
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.surface)
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.border))
-        .cornerRadius(10)
     }
 
-    private func warmupColor(_ status: String) -> Color {
-        switch status {
-        case "error": palette.danger
-        case "ready": palette.success
-        default: palette.textTertiary
-        }
+    private func isInstalled(_ backend: AsrBackend?) -> Bool {
+        guard let backend else { return false }
+        return model.backendStatus.first { $0.backend == backend }?.installed ?? false
+    }
+
+    /// backendMeta 里是内联 SVG，这里用近似字形 + 主题色着色。
+    @ViewBuilder
+    private func backendIcon(_ backend: AsrBackend, size: CGFloat) -> some View {
+        Image(systemName: backend.systemImage)
+            .font(.system(size: size * 0.62, weight: .medium))
+            .foregroundColor(backend.tintColor(in: palette))
+            .frame(width: size, height: size)
     }
 }
 
-// MARK: - 视频下载面板（M2 接 yt-dlp）
+// MARK: - 网络视频转换（对齐 VideoDownloadPanel.vue）
 
 struct VideoDownloadPanelView: View {
-    @Binding var url: String
     @State private var model = AppModel.shared
     @Environment(\.palette) private var palette
 
+    private struct VideoItem: Identifiable {
+        enum Status { case pending, downloading, completed, error }
+
+        let id: Int
+        let url: String
+        var status: Status = .pending
+        var filePath: String?
+        var error: String?
+    }
+
+    private static let pageSize = 5
+
+    @State private var items: [VideoItem] = []
+    @State private var newUrl = ""
+    @State private var currentPage = 1
+    @State private var nextID = 1
+    @State private var error = ""
+
+    private var totalPages: Int { (items.count + Self.pageSize - 1) / Self.pageSize }
+
+    private var paginatedItems: [VideoItem] {
+        let start = (currentPage - 1) * Self.pageSize
+        guard start < items.count else { return [] }
+        return Array(items[start..<min(start + Self.pageSize, items.count)])
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("视频 / 音频链接")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(palette.textSecondary)
-            TextField("https://…", text: $url)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-            Button {
-                model.errorMessage = "URL 下载转写将在 M2 里程碑接入（yt-dlp）"
-            } label: {
-                Text("下载并转写")
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(maxWidth: .infinity, minHeight: 26)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(palette.accent)
-            Text("下载引擎：yt-dlp（M2 接入）")
-                .font(.system(size: 10))
-                .foregroundColor(palette.textTertiary)
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            addSection
+            if !items.isEmpty { actionsBar }
+            content
+            if totalPages > 1 { pagination }
         }
-        .padding(10)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("网络视频转换")
+                .font(.system(size: 13, weight: .semibold))
+                .kerning(0.5)
+                .foregroundColor(palette.textSecondary)
+            if !items.isEmpty {
+                Text("\(items.count) 个视频")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(palette.textTertiary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var addSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                TextField("粘贴视频链接…", text: $newUrl)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13))
+                    .onSubmit(addVideo)
+                Button("添加", action: addVideo)
+                    .font(.system(size: 13, weight: .semibold))
+                    .buttonStyle(.borderedProminent)
+                    .tint(palette.accent)
+                    .disabled(newUrl.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Text("支持 YouTube、Bilibili 等主流视频网站，使用 yt-dlp 提取音频")
+                .font(.system(size: 11))
+                .foregroundColor(palette.textTertiary)
+            if !error.isEmpty {
+                Text(error)
+                    .font(.system(size: 12))
+                    .foregroundColor(palette.danger)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(palette.danger.opacity(0.08))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.danger.opacity(0.15)))
+                    .cornerRadius(6)
+            }
+        }
+    }
+
+    private var actionsBar: some View {
+        HStack {
+            Spacer()
+            Button("全部下载") { Task { await downloadAll() } }
+                .font(.system(size: 12, weight: .medium))
+                .buttonStyle(.bordered)
+                .disabled(!items.contains { $0.status == .pending })
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        VStack(spacing: 12) {
+            if items.isEmpty {
+                Text("添加视频链接后，会显示在这里")
+                    .font(.system(size: 13))
+                    .foregroundColor(palette.textTertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+            } else {
+                ForEach(paginatedItems) { item in
+                    videoRow(item)
+                }
+            }
+        }
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.surface)
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.border))
-        .cornerRadius(10)
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.border))
+        .cornerRadius(8)
+    }
+
+    private func videoRow(_ item: VideoItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(item.url)
+                .font(.system(size: 13))
+                .foregroundColor(palette.textPrimary)
+                .textSelection(.enabled)
+
+            HStack(spacing: 8) {
+                statusBadge(item.status)
+                switch item.status {
+                case .pending:
+                    rowButton("下载", background: palette.accent) { Task { await download(item) } }
+                case .completed:
+                    rowButton("转写", background: palette.success) { transcribe(item) }
+                case .error:
+                    rowButton("重试", background: palette.warning) { Task { await download(item) } }
+                case .downloading:
+                    EmptyView()
+                }
+                rowButton("移除", background: Color.clear, outlined: true) { remove(item.id) }
+                Spacer(minLength: 0)
+            }
+
+            if let message = item.error {
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.danger)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.surfaceHover)
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.border))
+        .cornerRadius(6)
+    }
+
+    private func statusBadge(_ status: VideoItem.Status) -> some View {
+        let color: Color = switch status {
+        case .pending: palette.warning
+        case .downloading: palette.accent
+        case .completed: palette.success
+        case .error: palette.danger
+        }
+        let text: String = switch status {
+        case .pending: "等待下载"
+        case .downloading: "下载中..."
+        case .completed: "✓ 完成"
+        case .error: "✗ 失败"
+        }
+        return Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12))
+            .cornerRadius(4)
+    }
+
+    private func rowButton(_ title: String, background: Color, outlined: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(outlined ? palette.textSecondary : .white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(outlined ? Color.clear : background)
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.border))
+                .cornerRadius(6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var pagination: some View {
+        HStack(spacing: 12) {
+            Spacer()
+            Button("‹") { goToPage(currentPage - 1) }
+                .disabled(currentPage == 1)
+            Text("\(currentPage) / \(totalPages)")
+                .font(.system(size: 12))
+                .foregroundColor(palette.textSecondary)
+                .monospacedDigit()
+            Button("›") { goToPage(currentPage + 1) }
+                .disabled(currentPage == totalPages)
+            Spacer()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
+    }
+
+    // MARK: - 行为
+
+    private func addVideo() {
+        error = ""
+        let trimmed = newUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            error = "请输入视频链接"
+            return
+        }
+        guard trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") else {
+            error = "请输入有效的 HTTP/HTTPS 链接"
+            return
+        }
+        guard !items.contains(where: { $0.url == trimmed }) else {
+            error = "该链接已添加"
+            return
+        }
+        items.append(VideoItem(id: nextID, url: trimmed))
+        nextID += 1
+        newUrl = ""
+        currentPage = max(1, totalPages)
+    }
+
+    private func remove(_ id: Int) {
+        items.removeAll { $0.id == id }
+        if totalPages > 0 && currentPage > totalPages {
+            currentPage = totalPages
+        }
+    }
+
+    private func goToPage(_ page: Int) {
+        guard page >= 1, page <= totalPages else { return }
+        currentPage = page
+    }
+
+    private func downloadAll() async {
+        for item in items.filter({ $0.status == .pending }) {
+            await download(item)
+        }
+    }
+
+    private func download(_ item: VideoItem) async {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[index].status = .downloading
+        items[index].error = nil
+        do {
+            let file = try await model.downloadAudio(from: item.url)
+            items[index].status = .completed
+            items[index].filePath = file.path
+        } catch {
+            items[index].status = .error
+            items[index].error = error.localizedDescription
+        }
+    }
+
+    private func transcribe(_ item: VideoItem) {
+        guard let path = item.filePath else { return }
+        let url = URL(fileURLWithPath: path)
+        model.recordedFileURL = url
+        Task { await model.transcribeFile(at: url, index: 0) }
     }
 }
 

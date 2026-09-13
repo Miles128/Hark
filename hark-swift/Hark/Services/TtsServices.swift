@@ -58,12 +58,7 @@ struct SynthesizeResult: Equatable {
 }
 
 enum TtsService {
-    static var outputDir: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Hark/tts", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
+    static var outputDir: URL { HarkPaths.ensure(HarkPaths.tts) }
 
     static func backendStatus(bridge: PythonBridge) -> [TtsBackendStatus] {
         [

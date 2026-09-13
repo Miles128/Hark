@@ -38,9 +38,17 @@ enum CoreAudioDevices {
         allDevices().filter(\.isInput)
     }
 
-    /// 对齐 has_blackhole：是否安装了 BlackHole 虚拟声卡。
+    /// Rust 的 `BLACKHOLE_NAMES`：虚拟回环声卡的设备名关键字。
+    static let loopbackNames = ["blackhole", "soundflower", "loopback"]
+
+    /// 对应 SourceSelector.vue 的 isBlackhole()。
+    static func isLoopbackDevice(_ name: String) -> Bool {
+        loopbackNames.contains { name.lowercased().contains($0) }
+    }
+
+    /// 对齐 has_blackhole：Rust 用 BLACKHOLE_NAMES 三个关键字，不只是 blackhole。
     static func hasBlackhole() -> Bool {
-        inputDevices().contains { $0.name.lowercased().contains("blackhole") }
+        inputDevices().contains { isLoopbackDevice($0.name) }
     }
 
     static func device(named name: String) -> AudioDeviceInfo? {
@@ -111,19 +119,5 @@ enum CoreAudioDevices {
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr else { return 0 }
         return size / UInt32(MemoryLayout<AudioStreamID>.size)
-    }
-}
-
-/// 对齐 open_audio_midi_setup：打开系统的音频 MIDI 设置。
-enum SystemAudio {
-    static func openAudioMIDISetup() {
-        let candidates = [
-            "/System/Applications/Utilities/Audio MIDI Setup.app",
-            "/Applications/Utilities/Audio MIDI Setup.app",
-        ]
-        for path in candidates where FileManager.default.fileExists(atPath: path) {
-            NSWorkspace.shared.open(URL(fileURLWithPath: path))
-            return
-        }
     }
 }

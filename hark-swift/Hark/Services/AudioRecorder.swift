@@ -28,16 +28,37 @@ final class AudioRecorder {
     private(set) var db: Float = -60
     private(set) var level: Double = 0
 
+    /// 对齐 Rust 的 slice_duration：5 秒一切。
+    static let sliceDuration: Double = 5
+
     private var engine: AVAudioEngine?
     private var file: AVAudioFile?
     private var outputURL: URL?
     private var source: AudioSourceKind = .microphone
+    private var slicer: Slicer?
 
-    static var recordingsDir: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Hark/recordings", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+    /// 切片队列（对应 Rust 的 slice_queue_tx）。未开启边录边转时为 nil。
+    private(set) var sliceStream: AsyncStream<(URL, Int)>?
+    private var sliceContinuation: AsyncStream<(URL, Int)>.Continuation?
+
+    static var recordingsDir: URL { HarkPaths.ensure(HarkPaths.recordings) }
+
+    /// 开启切片：startRecording 之前调用，之后从 sliceStream 取结果。
+    func enableSlicing() {
+        var continuation: AsyncStream<(URL, Int)>.Continuation?
+        sliceStream = AsyncStream(bufferingPolicy: .unbounded) { continuation = $0 }
+        sliceContinuation = continuation
+        let sink = continuation
+        slicer = Slicer(directory: Self.recordingsDir, sliceDuration: Self.sliceDuration) { url, index in
+            sink?.yield((url, index))
+        }
+    }
+
+    func disableSlicing() {
+        slicer = nil
+        sliceContinuation?.finish()
+        sliceContinuation = nil
+        sliceStream = nil
     }
 
     /// 录音期间持续读取音量；结束后返回 wav 文件路径。
@@ -60,18 +81,10 @@ final class AudioRecorder {
         }
 
         let stamp = Int(Date().timeIntervalSince1970)
-        let url = Self.recordingsDir.appendingPathComponent("hark-\(stamp).wav")
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: format.sampleRate,
-            AVNumberOfChannelsKey: Int(format.channelCount),
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-        ]
-        let file = try AVAudioFile(forWriting: url, settings: settings)
+        let url = Self.recordingsDir.appendingPathComponent("recording_\(stamp).wav")
+        let file = try AVAudioFile(forWriting: url, settings: Self.wavSettings(for: format))
 
-        Self.installTap(on: input, format: format, file: file, recorder: self)
+        Self.installTap(on: input, format: format, file: file, recorder: self, slicer: slicer)
 
         engine.prepare()
         do {
@@ -99,6 +112,7 @@ final class AudioRecorder {
         engine = nil
         file = nil
         outputURL = nil
+        disableSlicing()
         isRecording = false
         db = -60
         level = 0
@@ -122,10 +136,13 @@ final class AudioRecorder {
         on node: AVAudioInputNode,
         format: AVAudioFormat,
         file: AVAudioFile,
-        recorder: AudioRecorder
+        recorder: AudioRecorder,
+        slicer: Slicer?
     ) {
         node.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
             try? file.write(from: buffer)
+            // 与 Rust 一样在采集线程切文件，不把工作甩回主线程。
+            slicer?.append(buffer)
 
             let samples = buffer.floatChannelData?[0]
             var sumSquares: Float = 0
@@ -147,5 +164,82 @@ final class AudioRecorder {
         guard isRecording else { return }
         self.db = db
         level = Double(min(max((db + 60) / 60, 0), 1))
+    }
+
+    nonisolated static func wavSettings(for format: AVAudioFormat) -> [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: Int(format.channelCount),
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+    }
+}
+
+/// 边录边转的切片累加器，对齐 Rust `audio.rs` 的 `save_slice`。
+///
+/// 只在采集线程被 `append`，用锁只是为了和主线程的开启/停止安全交错。
+/// buffer 在 tap 回调返回后即失效，所以必须深拷贝再攒。
+final class Slicer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let directory: URL
+    private let sliceDuration: Double
+    private let onSlice: (URL, Int) -> Void
+
+    private var pending: [AVAudioPCMBuffer] = []
+    private var pendingFrames = 0
+    private var format: AVAudioFormat?
+    private var index = 0
+
+    init(directory: URL, sliceDuration: Double, onSlice: @escaping (URL, Int) -> Void) {
+        self.directory = directory
+        self.sliceDuration = sliceDuration
+        self.onSlice = onSlice
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard buffer.frameLength > 0 else { return }
+        if format == nil { format = buffer.format }
+        guard let format, buffer.format == format else { return }
+
+        guard let copy = Self.copy(buffer, format: format) else { return }
+        pending.append(copy)
+        pendingFrames += Int(buffer.frameLength)
+
+        let threshold = Int(Double(format.sampleRate) * sliceDuration)
+        guard pendingFrames >= threshold else { return }
+
+        let buffers = pending
+        let sliceIndex = index
+        pending = []
+        pendingFrames = 0
+        index += 1
+
+        let url = directory.appendingPathComponent(String(format: "slice_%04d.wav", sliceIndex))
+        guard let file = try? AVAudioFile(
+            forWriting: url,
+            settings: AudioRecorder.wavSettings(for: format)
+        ) else { return }
+        for buffer in buffers {
+            try? file.write(from: buffer)
+        }
+        onSlice(url, sliceIndex)
+    }
+
+    private static func copy(_ buffer: AVAudioPCMBuffer, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        guard let clone = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength),
+              let source = buffer.floatChannelData,
+              let target = clone.floatChannelData else { return nil }
+        clone.frameLength = buffer.frameLength
+        let bytes = Int(buffer.frameLength) * MemoryLayout<Float>.stride
+        for channel in 0..<Int(format.channelCount) {
+            memcpy(target[channel], source[channel], bytes)
+        }
+        return clone
     }
 }

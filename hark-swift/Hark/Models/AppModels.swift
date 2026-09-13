@@ -19,13 +19,42 @@ enum AsrBackend: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var displayName: String {
+    /// 侧边栏短标签，对应 BackendSelector.vue 的 backendMeta[...].label。
+    var sidebarLabel: String {
         switch self {
-        case .dashscope: "DashScope（云端）"
+        case .dashscope: "DashScope"
+        case .whisperCpp: "whisper.cpp"
+        case .mlxQwen3: "mlx-qwen3-asr"
+        case .sensevoice: "SenseVoice (MLX)"
+        case .openaiWhisper: "OpenAI Whisper"
+        }
+    }
+
+    /// 设置面板标签，对应 SettingsModal.vue 的 backendTypes。
+    var settingsLabel: String {
+        switch self {
+        case .dashscope: "DashScope（联网）"
         case .whisperCpp: "whisper.cpp（本地）"
-        case .mlxQwen3: "MLX Qwen3-ASR（本地）"
+        case .mlxQwen3: "mlx-qwen3-asr（本地）"
         case .sensevoice: "SenseVoice（本地）"
-        case .openaiWhisper: "OpenAI Whisper API（云端）"
+        case .openaiWhisper: "OpenAI Whisper（联网）"
+        }
+    }
+
+    /// backendTypes 的下拉顺序（MlxQwen3 在首位，也是新建档案的默认值）。
+    static let settingsOrder: [AsrBackend] = [.mlxQwen3, .sensevoice, .whisperCpp, .dashscope, .openaiWhisper]
+
+    /// 对应 isOnlineBackend()：联网后端需要 API Key / Base URL。
+    var isOnline: Bool { self == .dashscope || self == .openaiWhisper }
+
+    /// backendMeta 的内联 SVG 在 SwiftUI 侧用近似字形替代。
+    var systemImage: String {
+        switch self {
+        case .mlxQwen3: "square.stack.3d.up"
+        case .sensevoice: "waveform.path"
+        case .whisperCpp: "mic"
+        case .dashscope: "clock"
+        case .openaiWhisper: "sparkles"
         }
     }
 
@@ -40,32 +69,54 @@ enum AsrBackend: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    var themeColorHex: UInt32 {
+    var warmupReadyMessage: String {
         switch self {
-        case .dashscope: 0xFF6B00
-        case .whisperCpp: 0x5856D6
-        case .mlxQwen3: 0xAF52DE
-        case .sensevoice: 0x30D158
-        case .openaiWhisper: 0x10A37F
+        case .sensevoice: "SenseVoice 模型就绪"
+        default: "模型就绪"
         }
     }
 }
 
 struct AsrProfile: Codable, Identifiable, Equatable {
-    var id: String = UUID().uuidString
+    var id: String = ""
     var name: String = ""
     var backend: AsrBackend = .dashscope
     var apiKey: String = ""
     var apiBase: String = ""
+    var modelName: String = ""
     var whisperCppPath: String = ""
     var whisperModelPath: String = ""
-    var modelName: String = ""
+    var installHint: String = ""
 }
 
-/// 对齐 SettingsModal.vue 的 AppSettings。
+/// 对齐 Rust `AppSettings`：`#[serde(rename_all = "camelCase", default)]`。
+/// Rust 侧 `activeProfileId` 是 `Option<String>`，可能是 null；缺键走默认值。
 struct AppSettings: Codable, Equatable {
     var theme: ThemeMode = .system
-    var autoSaveInterval: Int = 60
+    /// 单位是秒，0 表示关闭自动保存（与 Rust 的 Duration::from_secs 一致）。
+    var autoSaveInterval: UInt64 = 60
     var autoSaveFormat: String = "txt"
     var activeProfileId: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case theme, autoSaveInterval, autoSaveFormat, activeProfileId
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        theme = try container.decodeIfPresent(ThemeMode.self, forKey: .theme) ?? .system
+        autoSaveInterval = try container.decodeIfPresent(UInt64.self, forKey: .autoSaveInterval) ?? 60
+        autoSaveFormat = try container.decodeIfPresent(String.self, forKey: .autoSaveFormat) ?? "txt"
+        activeProfileId = try container.decodeIfPresent(String.self, forKey: .activeProfileId) ?? ""
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(theme.rawValue, forKey: .theme)
+        try container.encode(autoSaveInterval, forKey: .autoSaveInterval)
+        try container.encode(autoSaveFormat, forKey: .autoSaveFormat)
+        try container.encode(activeProfileId.isEmpty ? nil : activeProfileId, forKey: .activeProfileId)
+    }
 }
