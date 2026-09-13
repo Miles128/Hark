@@ -80,16 +80,17 @@ M1 用 A 起步，但 M2–M4 的"逐个换成 B"没有发生：五路 ASR、TTS
 - **M2 录音链路** ✅：AVAudioEngine 双路采集 → whisper.cpp（走 CLI 子进程，即 §3 方案 A/C）
 - **M3 TTS** ✅：Edge TTS + CosyVoice、播放与导出。**偏离**：Edge 没有实现原生 WebSocket 客户端，仍调 pylibs `edge_tts`
 - **M4 本地模型** ✅：mlx-qwen3-asr / SenseVoice / OpenAI Whisper。SenseVoice 未砍，仍走 Python（mlx_audio）
-- **M5 收尾** ✅：GRDB 接现有 `profiles.db`、27 命令对照 §4 核销、`xcodebuild test` 51 项通过
+- **M5 收尾** ✅：GRDB 接现有 `profiles.db`、27 命令对照 §4 核销、`xcodebuild test` 52 项通过
 
-自动化跑测里 `-skip-testing` 掉 3 个起子进程的用例（`PythonBridgeTests/testRunPythonPrintsOK`、`AsrBackendsTests/testSenseVoiceTranscribesSpeechThroughPythonBridge`、`AsrBackendsTests/testWhisperCppTranscribesSpeech`）：在 Xcode 测试宿主里 spawn Python 会卡在解释器初始化，见 §6。这三条改为手动验证。
+自动化跑测里 `-skip-testing` 掉 3 个起子进程的用例（`PythonBridgeTests/testRunPythonPrintsOK`、`AsrBackendsTests/testSenseVoiceTranscribesSpeechThroughPythonBridge`、`AsrBackendsTests/testWhisperCppTranscribesSpeech`）：App 在 `~/Documents` 下起子进程会被 TCC 授权卡住（详见 §6），这三条改为手动验证，验证前要先点掉授权弹窗。
 
 ## 6. 风险与实际结果
 
 - ~~whisper.cpp 的 Swift 集成需 C++ interop 或 xcframework 打包~~ —— 未发生：继续用 CLI 子进程，构建零改动
 - SenseVoice 实际接线的是 Rust `asr/sense_voice.rs`（走 Python `mlx_audio`）；`asr/sensevoice.rs` 是**孤儿文件**，`asr/mod.rs` 里没有 `pub mod` 声明，从未参与编译。Swift 版照抄 `sense_voice.rs`，因此不需要 onnxruntime 与 onnx 导出
 - BlackHole 双路采集已按 AVAudioEngine 多 tap 实现，但**仍需在装了 BlackHole 的机器上实测**；本机未装，只验过禁用态样式
-- **`xcodebuild test` 宿主里 spawn Python 会挂**：解释器初始化阶段阻塞在 `os.listdir → open()`，连 `python -s -c "print('ok')"` 也不返回；同一条命令在普通 shell 里 19 ms 完成。测试宿主进程 `cwd=/`、stdin 是 tty、`PYTHONPATH` 指向 `~/Documents` 下的 pylibs（iCloud「桌面与文稿」同步开启），三者之一导致内核态等待。M5 期间 03:10 / 03:15 两次跑测这三条用例还是通过的，之后稳定复现挂起，故按环境问题处理
+- **从 App 里起子进程会被 TCC 拦在 `open()`**：`xcodebuild test` 宿主里 spawn Python 卡在解释器初始化，`whisper-cli` 更彻底——0.0% CPU，卡在 dyld 加载**自己这个可执行文件**（`getOnDiskBinarySliceOffset → mapFileReadOnly → open`），还没进 main。两个卡点的资源路径都在 `~/Documents/My Projects/Hark/` 下。**同一个 whisper-cli 在 shell 里立刻跑通**，所以与模型、iCloud、文件系统本身都无关，是 App 对 `~/Documents` 的访问授权在等确认；而 `CODE_SIGN_IDENTITY: "-"` 每次重链接签名都变，旧授权作废 → 重新弹窗 → 无人点击 → 永久阻塞。03:10 / 03:15 那两次能过，正是弹窗还没被作废的时候。
+  因此自动化跑测固定跳过 3 个起子进程的用例，改手动验证；手动验证前需要人到屏幕前点掉授权弹窗（或给构建产物授予「文稿文件夹」访问）。
 - 麦克风权限：Info.plist `NSMicrophoneUsageDescription` 必填 —— 已配在 `project.yml`（`INFOPLIST_KEY_NSMicrophoneUsageDescription`）
 - **`@Observable` 的 `didSet` 在 `init` 里也会触发**（普通 class 不会）。M5 就栽在这一点上：AppModel 启动时的赋值链让 `settings` 的 didSet 跑起来，每次开 App 都重写一遍与 Tauri 共享的 `settings.json`，而 Rust 只在 `set_app_settings` 时写盘。用"语义未变就不写"抵消。**任何 @Observable + didSet 持久化的组合都要按这个前提设计**，LearnEnglish 迁移同理
 - 顺带暴露：`PythonBridge.run` / `UrlAudioDownloader.download` 都是 `readDataToEndOfFile()` + `waitUntilExit()`，**没有超时**，子进程卡死会永久占住一条 userInitiated 工作线程。方案 B（真原生推理）落地前值得补上
